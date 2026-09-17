@@ -1,0 +1,78 @@
+# dsh-niubash-only — profile bundle patch (dsh 0.1.5-rc.2)
+#
+# 1. Disable every first-party `ctx.shell` provider (and the PowerShell tool
+#    row). Exactly one provider may register that service, so replacing both
+#    rows with the Niubash executor is what makes Niubash the harness-wide
+#    shell for every consumer: the model tools, background jobs, hook bridges,
+#    tmux context, and in-process callers.
+# 2. Keep the `bash` tool mounted — it is a dialect-neutral consumer of
+#    `ctx.shell`, and the dialect it advertises is exactly what Niubash speaks.
+# 3. Insert the Niubash executor and the Niubash teaching layer.
+#
+# The teaching layer rewrites the shell tool's description (and its `command`
+# parameter) into what Niubash actually supports on Windows, and adds the
+# syntax guide to the system prompt.
+#
+# If another third-party Niubash/Winuxsh bundle is installed (for example
+# `@cmx666/dsh-winuxsh-bundle`, whose `winuxsh-sandbox` row is also a
+# `ctx.shell` provider), disable that row as well or the boot fails on a
+# duplicate `shell` service.
+
+- id: bash-sandbox
+  disabled: true
+
+- id: pwsh-sandbox
+  disabled: true
+
+- id: tool-pwsh
+  disabled: true
+
+- id: tool-bash
+  disabled: false
+
+- insert:
+    # The one and only `ctx.shell` provider: every command runs as
+    # `niu -c "<command>"` under the same sandbox policy, timeout, output-cap,
+    # spill, background-job, and cancellation machinery the first-party
+    # executors use.
+    - id: niubash-executor
+      name: dsh-niubash-only/executor
+      config:
+        # Budgets mirror dsh's own `pwsh-sandbox` row defaults.
+        timeoutMs: 120000
+        maxTimeoutMs: 600000
+        maxOutputBytes: 64000
+        graceMs: 3000
+        # Niubash resolution: config -> $DSH_NIU_PATH -> PATH -> the well-known
+        # install directory (%LOCALAPPDATA%\Programs\Niubash) -> bare `niu`.
+        # niuPath: C:\Users\me\AppData\Local\Programs\Niubash\niu.exe
+        # Refuse handing a command to another shell (the "only Niubash" rule).
+        enforceNiubashOnly: true
+        # Refuse PowerShell/CMD habits before spawning, naming the Bash spelling.
+        dialectLint: true
+        # Append one actionable line to stderr when a command fails.
+        dialectHints: true
+        # Boot fails when `niu` cannot be resolved; set false to degrade instead.
+        requireNiubash: true
+        # Run `niu --version` once at boot (reported in logs and in the guide).
+        verifyNiubash: true
+        # Run one real one-shot command at boot: a deployment that can resolve
+        # `niu` but not run it (a sandbox that denies $HOME/.niubash_history)
+        # says so once, at boot, instead of failing every tool call.
+        smokeTest: true
+        # Ask Niubash which `bash`/`sh` its PATH resolves to, so handing a
+        # command to those two is allowed only when they are Niubash's own
+        # shims (and refused when they are Git Bash / WSL).
+        probeNativeShells: true
+
+    # Teaching layer: mandatory shell rules as a prompt section, the Bash on
+    # Windows guide, and an honest shell-tool description.
+    - id: niubash-teaching
+      name: dsh-niubash-only/teaching
+      config:
+        # full | compact | off
+        guide: full
+        # Rewrite the shell tool description to describe Niubash.
+        rewriteToolDescriptions: true
+        # Add the short "shell: Niubash only" rules section.
+        rules: true

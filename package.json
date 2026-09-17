@@ -1,0 +1,108 @@
+{
+  "name": "dsh-niubash-only",
+  "version": "0.1.0",
+  "description": "Niubash-only shell executor and Bash-dialect teaching for DeepSeek Harness (dsh 0.1.5-rc.2): every ctx.shell execution runs as `niu -c`, PowerShell/cmd/WSL/nu handoffs are refused, PowerShell habits are refused before they spawn, a failed call carries an actionable hint, and the model is taught what Niubash on Windows actually supports.",
+  "license": "MIT",
+  "author": "dsh-niubash-only contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./executor": {
+      "default": "./lib/executor.js"
+    },
+    "./teaching": {
+      "default": "./lib/teaching.js"
+    },
+    "./guide": {
+      "default": "./lib/guide.js"
+    },
+    "./guard": {
+      "default": "./lib/guard.js"
+    },
+    "./dialect": {
+      "default": "./lib/dialect.js"
+    },
+    "./niubash": {
+      "default": "./lib/niubash.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "examples",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "niubash",
+    "niu",
+    "winuxcmd",
+    "bash",
+    "shell",
+    "windows",
+    "cordis"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YMRwithNoworry/dsh-niubash-only.git"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/",
+    "test:integration": "node test/integration.mjs",
+    "test:integration:confined": "node test/integration.mjs --mode workspace-write",
+    "link-peers": "node dev/link-peers.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-bash-sandbox": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-pwsh-sandbox": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-sandbox": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-sandbox-policy": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-shell": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-subprocess": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.5-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-bash-sandbox": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-pwsh-sandbox": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-sandbox": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-sandbox-policy": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-shell": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-subprocess": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-system-prompt": {
+      "optional": true
+    }
+  }
+}

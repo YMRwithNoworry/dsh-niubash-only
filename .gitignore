@@ -1,0 +1,6 @@
+node_modules/
+dist/
+cordis.patch.local.yml
+*.log
+# Scratch patch/verification scripts used while developing a change.
+.tmp-*.mjs
