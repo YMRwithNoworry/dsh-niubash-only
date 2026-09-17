@@ -155,10 +155,30 @@ test('full-access foreground runs spawn the Niubash argv and report unconfined f
   assert.equal(result.stdout.text, 'ok')
 })
 
-test('confined foreground runs wrap the Niubash argv through ctx.sandbox', async () => {
+test('the default posture is direct execution: a confined session is NOT wrapped', async () => {
   const { executor, subprocess, confined } = makeExecutor({
     sandboxMode: 'workspace-write',
     confine: (argv) => ['acl-runner', '--', ...argv],
+  })
+  const result = await executor.run(executor.resolve({ command: 'ls' }))
+  assert.equal(confined.length, 0, 'ctx.sandbox is never asked to wrap by default')
+  assert.deepEqual(subprocess.spawns[0].argv, ['niu.exe', '-c', 'ls'])
+  assert.deepEqual(result.sandbox, { mode: 'danger-full-access', denied: false, bypassed: 'workspace-write' })
+})
+
+test('the unconfined confine() envelope says what it did not do', () => {
+  const { executor } = makeExecutor({ sandboxMode: 'workspace-write' })
+  const wrapped = executor.confine('ls', { mode: 'workspace-write' })
+  assert.deepEqual(wrapped.argv, ['niu.exe', '-c', 'ls'])
+  assert.equal(wrapped.enforcement, 'none')
+  assert.deepEqual(wrapped.denialSignatures, [])
+})
+
+test('sandbox: true keeps the first-party confinement path', async () => {
+  const { executor, subprocess, confined } = makeExecutor({
+    sandboxMode: 'workspace-write',
+    confine: (argv) => ['acl-runner', '--', ...argv],
+    config: { sandbox: true },
   })
   const result = await executor.run(executor.resolve({ command: 'ls' }))
   assert.deepEqual(confined[0].argv, ['niu.exe', '-c', 'ls'])
@@ -168,7 +188,7 @@ test('confined foreground runs wrap the Niubash argv through ctx.sandbox', async
 })
 
 test('a refusal inside a confined call happens before the sandbox is asked to wrap', async () => {
-  const { executor, confined } = makeExecutor({ sandboxMode: 'workspace-write' })
+  const { executor, confined } = makeExecutor({ sandboxMode: 'workspace-write', config: { sandbox: true } })
   await assert.rejects(() => executor.run(executor.resolve({ command: 'cmd /c dir' })), /Niubash-only/)
   assert.equal(confined.length, 0)
 })
@@ -183,10 +203,11 @@ test('background starts spawn Niubash and expose a live handle', async () => {
   await proc.done
 })
 
-test('confined background runs wrap the argv and stamp sandbox facts on settlement', async () => {
+test('sandbox: true wraps background runs and stamps sandbox facts on settlement', async () => {
   const { executor, subprocess } = makeExecutor({
     sandboxMode: 'workspace-write',
     confine: (argv) => ['acl-runner', '--', ...argv],
+    config: { sandbox: true },
   })
   const proc = executor.start(executor.resolve({ command: 'ls' }))
   assert.deepEqual(subprocess.spawns[0].argv, ['acl-runner', '--', 'niu.exe', '-c', 'ls'])
@@ -194,6 +215,17 @@ test('confined background runs wrap the argv and stamp sandbox facts on settleme
   assert.equal(proc.status, 'completed')
   assert.equal(proc.sandbox?.mode, 'workspace-write')
   assert.equal(proc.sandbox?.denied, false)
+})
+
+test('by default background runs are not wrapped either', async () => {
+  const { executor, subprocess, confined } = makeExecutor({
+    sandboxMode: 'workspace-write',
+    confine: (argv) => ['acl-runner', '--', ...argv],
+  })
+  const proc = executor.start(executor.resolve({ command: 'ls' }))
+  assert.equal(confined.length, 0)
+  assert.deepEqual(subprocess.spawns[0].argv, ['niu.exe', '-c', 'ls'])
+  await proc.done
 })
 
 test('a failed call carries an actionable Niubash hint on its stderr', async () => {

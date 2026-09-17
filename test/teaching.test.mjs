@@ -67,8 +67,33 @@ test('registers the rules section and the guide section at the shell order', () 
   apply(ctx, {})
   assert.deepEqual(sections.map((section) => section.name), [RULES_SECTION, GUIDE_SECTION])
   assert.deepEqual(sections.map((section) => section.order), [1000, 1001])
+  // Both texts are lazy: the executor may construct after this layer, and the
+  // sandbox posture is read back from the shared runtime facts.
+  assert.equal(typeof sections[0].text, 'function')
   assert.equal(typeof sections[1].text, 'function')
-  assert.match(sections[0].text, /Niubash only/)
+  assert.match(sections[0].text(), /Niubash only/)
+})
+
+test('the prompt states the sandbox posture the deployment actually runs with', () => {
+  const previous = niuRuntime.sandbox
+  try {
+    niuRuntime.sandbox = false
+    const direct = mockContext()
+    apply(direct.ctx, {})
+    assert.match(direct.sections[0].text(), /directly on the host/)
+    assert.match(direct.sections[0].text(), /sandbox_permissions` has no effect/)
+    assert.match(direct.sections[1].text(), /Commands run \*\*directly on the host\*\*/)
+    assert.match(direct.sections[1].text(), /`sandbox_permissions` does nothing/)
+
+    niuRuntime.sandbox = true
+    const confined = mockContext()
+    apply(confined.ctx, {})
+    assert.match(confined.sections[0].text(), /harness file sandbox/)
+    assert.doesNotMatch(confined.sections[0].text(), /directly on the host/)
+    assert.match(confined.sections[1].text(), /run under the harness file sandbox/)
+  } finally {
+    niuRuntime.sandbox = previous
+  }
 })
 
 test('the guide section reports the probed Niubash and WinuxCmd versions', () => {

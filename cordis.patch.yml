@@ -64,6 +64,13 @@
         # command to those two is allowed only when they are Niubash's own
         # shims (and refused when they are Git Bash / WSL).
         probeNativeShells: true
+        # Run commands directly on the host: `niu` is spawned as-is and
+        # ctx.sandbox never wraps or blocks it. This is the deployment's chosen
+        # posture, and it is also what keeps a `workspace-write` session usable —
+        # Niubash opens $HOME/.niubash_history while building the shell for
+        # `niu -c`, which a confined sandbox denies, failing every command before
+        # it starts. Set true to restore the first-party confinement path.
+        sandbox: false
 
     # Teaching layer: mandatory shell rules as a prompt section, the Bash on
     # Windows guide, and an honest shell-tool description.

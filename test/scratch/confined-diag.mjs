@@ -40,7 +40,17 @@ if (install.status !== 0) {
 const profileDir = join(home, 'profiles', profile)
 copyFileSync(join(here, 'confined-diag-probe.mjs'), join(profileDir, 'diag-probe.mjs'))
 const patchPath = join(profileDir, 'diag.patch.yml')
-writeFileSync(patchPath, ['- insert:', '    - id: diag-probe', '      name: ./diag-probe.mjs', ''].join('\n'))
+// The bundle runs on the host by default, which hides the failure this script
+// exists to show, so the executor row is switched back to confinement here.
+writeFileSync(patchPath, [
+  '- id: niubash-executor',
+  '  config:',
+  '    sandbox: true',
+  '- insert:',
+  '    - id: diag-probe',
+  '      name: ./diag-probe.mjs',
+  '',
+].join('\n'))
 const boot = run(['--profile', profile, '--patch', patchPath])
 console.log(`diag: exit=${boot.status} home=${home}`)
 console.log(boot.stdout ?? '')

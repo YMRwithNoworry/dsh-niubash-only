@@ -115,10 +115,12 @@ export async function apply(ctx) {
       skip('preset-scoped shell tool checks', 'the include was re-applied and disposed this fiber')
     }
 
-    // A deployment whose sandbox denies the history file Niubash opens while
-    // building the shell for `niu -c` cannot run *any* command — a Niubash
-    // host-layer limitation the executor reports in its boot smoke test. The
-    // refusals below still hold (they happen before a subprocess exists), but
+    // A deployment that opts into confinement (`sandbox: true`) in a session
+    // whose policy confines cannot run *any* command under Niubash 1.1.4: the
+    // shell opens `$HOME/.niubash_history` while building itself and the sandbox
+    // denies it. The executor reports that in its boot smoke test. The bundle
+    // default (running on the host) never reaches this branch; when it does hit,
+    // the refusals below still hold (they happen before a subprocess exists) and
     // the checks that need a real command are reported as skips with the cause.
     const smoke = shell.niuSmoke
     // Only the documented host-layer failure excuses the command checks. Any
@@ -149,8 +151,20 @@ export async function apply(ctx) {
 
       const pipeline = await shell.run(shell.resolve({ command: "printf 'beta\\nalpha\\n' | sort | head -1" }))
       record('runs a Unix-tool pipeline', pipeline.exitCode === 0 && pipeline.stdout.text.trim() === 'alpha', pipeline.stdout.text)
+
+      // The bundle's posture: `niu` runs directly on the host. In a session whose
+      // policy asks for confinement the work still happens, and the settled facts
+      // say both what ran (danger-full-access) and what was ignored (`bypassed`).
       const expectedMode = ctx.sandboxPolicy?.defaultMode
-      record('the run reports its sandbox facts', expectedMode === undefined || pipeline.sandbox?.mode === expectedMode, `expected ${expectedMode}, reported ${pipeline.sandbox?.mode}`)
+      if (expectedMode === undefined || expectedMode === 'danger-full-access') {
+        record('the run reports its sandbox facts', pipeline.sandbox?.mode === 'danger-full-access', `reported ${JSON.stringify(pipeline.sandbox)}`)
+      } else {
+        record(
+          `a ${expectedMode} session still runs commands (the executor runs on the host)`,
+          pipeline.exitCode === 0 && pipeline.sandbox?.mode === 'danger-full-access' && pipeline.sandbox?.bypassed === expectedMode,
+          `reported ${JSON.stringify(pipeline.sandbox)}`,
+        )
+      }
 
       const external = await shell.run(shell.resolve({ command: 'git --version' }))
       record('runs a native Windows program', external.exitCode === 0 && /git version/.test(external.stdout.text), external.stdout.text)

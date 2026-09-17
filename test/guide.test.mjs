@@ -117,6 +117,29 @@ test('the tool description states the dialect and the traps', () => {
   assert.match(NIUBASH_COMMAND_PARAM_DESCRIPTION, /Bash/)
 })
 
+test('the description tells the truth about where commands run', () => {
+  // Default posture: unconfined on the host, so no sandbox marker can appear and
+  // escalation is inert — the description must say both instead of promising them.
+  const direct = buildToolDescription({ background: true, escalation: true })
+  assert.match(direct, /directly on the host/)
+  assert.match(direct, /`sandbox_permissions` parameter has no effect/)
+  assert.ok(!direct.includes('A blocked file operation'))
+  assert.ok(!direct.includes('Attempting a command the sandbox may deny'))
+
+  // Opt-in confinement keeps the first-party wording and escalation guidance.
+  const confined = buildToolDescription({ background: true, escalation: true, sandbox: true })
+  assert.match(confined, /may run under a file sandbox/)
+  assert.match(confined, /Attempting a command the sandbox may deny/)
+  assert.ok(!confined.includes('directly on the host'))
+})
+
+test('the guide and the rules state the execution posture too', () => {
+  assert.match(buildGuide({ variant: 'full' }), /Commands run \*\*directly on the host\*\*/)
+  assert.match(buildShellRules(), /no file sandbox wraps them/)
+  assert.match(buildGuide({ variant: 'full', sandbox: true }), /run under the harness file sandbox/)
+  assert.match(buildShellRules({ sandbox: true }), /harness file sandbox/)
+})
+
 test('every runnable guide block runs under Niubash', { skip: available ? false : 'Niubash is not installed on this machine' }, () => {
   const markdown = [buildGuide({ variant: 'full' }), buildGuide({ variant: 'compact' })].join('\n')
   const snippets = blocks(markdown)

@@ -15,7 +15,8 @@ One plugin, five cooperating parts:
 1. **Takes over `ctx.shell` (the execution layer)**
    The two first-party executors `bash-sandbox` / `pwsh-sandbox` are disabled and replaced by `dsh-niubash-only/executor`: every shell execution becomes
    `niu -c "<command>"`.
-   It swaps the **capability seam** rather than the model tool, so every consumer in dsh that goes through `ctx.shell` uses Niubash: the model tools, background jobs (`run_in_background`), the hook bridges (`dsh-hooks-*`), `tmux-context`, and any in-process plugin call. Timeouts, output caps, spill files, background handles, cancellation, sandbox policy and denial facts all stay on the first-party implementation (it extends `SandboxPwshExecutor` / `SandboxBashExecutor` and only replaces argv).
+   It swaps the **capability seam** rather than the model tool, so every consumer in dsh that goes through `ctx.shell` uses Niubash: the model tools, background jobs (`run_in_background`), the hook bridges (`dsh-hooks-*`), `tmux-context`, and any in-process plugin call. Timeouts, output caps, spill files, background handles, cancellation and result facts all stay on the first-party implementation (it extends `SandboxPwshExecutor` / `SandboxBashExecutor` and only replaces argv).
+   **Commands run directly on the host by default**: `ctx.sandbox` never wraps or blocks `niu` (`sandbox: false`), so even a confined session keeps working; the settled facts honestly report `mode: danger-full-access`, plus `bypassed: <mode>` when the session asked for confinement. Set `sandbox: true` to restore the first-party wrapping semantics (see below for why, and for the upstream fix).
    `niu -c` is a one-shot command domain: it loads **no `~/.niubashrc`, no plugins, no interactive hooks, no banner**, and passes the exit code through unchanged — exactly the deterministic contract an agent needs.
 
 2. **Refuses "just run it in another shell" (the enforcement layer)**
@@ -124,7 +125,8 @@ The patch layer's defaults (`cordis.patch.yml`):
     requireNiubash: true       # fail boot when niu cannot be found (instead of failing every call)
     verifyNiubash: true        # probe `niu --version` once at boot
     probeNativeShells: true    # probe whether this machine's bash/sh resolve to Niubash
-    smokeTest: true            # run one real command at boot, so a sandbox that blocks it says so at once
+    smokeTest: true            # run one real command at boot, so a broken start says so at once
+    sandbox: false             # run directly on the host: ctx.sandbox never wraps or blocks niu
 
 - id: niubash-teaching
   name: dsh-niubash-only/teaching
@@ -146,8 +148,9 @@ Executor fields:
 | `dialectHints` | `true` | Append one `Niubash hint (…)` line to a failed call's stderr |
 | `requireNiubash` | `true` | Fail boot when `niu` cannot be resolved |
 | `verifyNiubash` / `verifyTimeoutMs` | `true` / `10000` | Probe `niu --version` at boot, and its timeout |
-| `smokeTest` | `true` | Run one real call path at boot (`echo niubash-smoke-ok`), so boot-time failures like "the sandbox blocks `niu -c`" are written to the boot log (see "Sandbox modes and Niubash") |
+| `smokeTest` | `true` | Run one real call path at boot (`echo niubash-smoke-ok`), so a start-time failure is written to the boot log |
 | `probeNativeShells` | `true` | Probe `command -v bash; command -v sh` at boot and decide from it whether `bash`/`sh` are allowed |
+| `sandbox` | `false` | Whether `ctx.sandbox` wraps shell commands. **Off by default**: `niu` runs directly on the host as the harness process, and the settled facts report `mode: danger-full-access` — plus `bypassed: <ignored mode>` when the session asked for confinement. Set `true` to keep the first-party confinement path (Niubash 1.1.4 cannot start under a confined policy — see below) |
 
 **Executable resolution order**: `niuPath` → `DSH_NIU_PATH` → the first `PATH` entry holding `niu.exe` → the known install directories (`%LOCALAPPDATA%\Programs\Niubash`, `%ProgramFiles%\Niubash`, `%ProgramFiles(x86)%\Niubash`) → bare `niu.exe`.
 The install-directory step is deliberate: the Niubash installer appends its directory to the **user PATH** and broadcasts the environment change, but an already-running harness process still holds the environment it started with — falling back to the documented install directory keeps a deployment working without restarting the host.
@@ -173,22 +176,30 @@ What the plugin guarantees is that **everything going through `ctx.shell`** is N
 4. **The hook commands of `dsh-hooks-claude-code` / `dsh-hooks-codex`**. They execute through `ctx.shell`, so they are Niubash now: **hooks written for PowerShell will fail**, hooks written for Bash work.
 5. **The TUI's resident PTY shell** (`dsh-terminal-bash` + `dsh-tool-bash-persistent`) goes through the terminal seam, not `ctx.shell`, and the plugin does not replace it.
 
-Sandboxing and permissions are unchanged: `danger-full-access` executes directly, and confined modes still wrap Niubash's argv through `ctx.sandbox.confine()` and report `mode` / `denied` / `enforcement` as usual.
+Where commands execute: **directly on the host by default**, with no file sandbox (`sandbox: false`). `niu` is spawned as the harness process and can reach anything the harness can; the settled facts report `mode: danger-full-access` (plus `bypassed: <mode>` when the session asked for confinement), and the prompt no longer promises `[sandbox: …]` markers or a working `sandbox_permissions`. Set `sandbox: true` to restore the first-party wrapping semantics.
 
-## Sandbox modes and Niubash
+## Why the sandbox is off by default (and the upstream fix)
 
-While building the shell for `niu -c`, Niubash opens `$HOME/.niubash_history` — even when the one command it is about to run needs no history at all. A confined sandbox (`workspace-write` / `read-only`) does not allow writing outside the workspace, so `niu` exits **before running any command**:
+This is not laziness — Niubash 1.1.4 and a confined sandbox are mutually exclusive today. While building the shell for `niu -c`, Niubash opens `$HOME/.niubash_history`, even when the one command it is about to run needs no history at all. A confined sandbox (`workspace-write` / `read-only`) does not allow reaching outside the workspace, so `niu` exits **before running any command**:
 
 ```text
-niu: failed to open history provider C:\\Users\\me\\.niubash_history: I/O error: 拒绝访问。 (os error 5)
+niu: failed to open history provider C:\Users\me\.niubash_history: I/O error: 拒绝访问。 (os error 5)
 ```
 
-That is a Niubash host-layer limitation, not a refusal by this plugin: the plugin can neither skip the history file on its behalf nor pretend everything is fine in that mode. Therefore:
+In the source: the `-c` branch of `src/main.rs` still calls `Shell::new`, and `Shell::new` builds the history provider (`crates/niubash-runtime/src/shell.rs` → `RubashHistoryProvider::with_file`). Reproduce it with `node test/scratch/confined-diag.mjs workspace-write` (that script switches the executor back to `sandbox: true` and prints each result).
 
-- The executor runs a **smoke test** at boot (`smokeTest: true`, on by default). It takes exactly the path a model tool call takes (`run(resolve({ command }))`), so when the sandbox really blocks it, the boot log shows **the reason above, immediately**, together with the two ways out — switch to the `danger-full-access` permission preset, or make the history file reachable from the sandbox — instead of waiting for every tool call to report the same cryptic error.
-- That fact is exposed to in-process consumers as `niuSmoke` (`{ ok, detail }`) on the shell service. The integration test uses it to mark the "needs a real command" assertions as SKIP rather than FAIL, while still checking every refusal (foreign-shell handoff, dialect preflight) and the prompt assembly **one by one** — they all happen before a subprocess exists, so the sandbox is irrelevant to them.
+So the plugin ships two postures:
 
-**Bottom line**: to run dsh with Niubash on Windows, set the permission mode to `danger-full-access` (`DSH_PERMISSION_MODE=danger-full-access`, or the same-named permission preset in the web UI). Measured on this machine: under `danger-full-access` the integration test passes 35/35; under `workspace-write` it passes 26/26 with 8 SKIPs, and every SKIP is explained by the limitation above.
+| Posture | Behavior | When |
+|---|---|---|
+| `sandbox: false` (default) | `niu` runs directly on the host; `ctx.sandbox` is not involved at all; confined sessions keep working | Local development, sessions that need a confined preset |
+| `sandbox: true` | The first-party wrapping and denial classification; under a confined policy every command then fails on the history file above | Deployments that need sandbox semantics (once the upstream fix lands) |
+
+The upstream fix is small: `niu -c` needs no history at all — skip the history provider on the `-c` path, or let `NIU_HISTORY_PATH` / `--no-history` override it. Once that lands, `sandbox: true` gives confined execution back.
+
+The plugin does not pretend otherwise: the boot smoke test (`smokeTest: true`, on by default) takes exactly the path a model tool call takes, so a shell that cannot start says why **at boot**, and the fact is exposed to in-process consumers as `niuSmoke` (`{ ok, detail }`).
+
+**Measured on this machine**: the integration test passes **35/35 under both `danger-full-access` and `workspace-write`**; the confined run explicitly asserts that a confined session still runs commands and that the result reports `bypassed: "workspace-write"`.
 
 ## What the teaching layer gives the model
 
@@ -201,20 +212,21 @@ With `guide: full`, the system prompt gains (right next to the shell tool's guid
 - Pipes/redirection/exit codes: `> >> 2> 2>&1 2>/dev/null &>`, `/dev/null` versus `nul`, exit codes passed through unchanged, `pipefail`, and the fact that a failing command does not abort the ones after it.
 - Translation tables: PowerShell→Bash (30 rows, including `$env:NAME`, `Get-*`, `Select-Object -First`, `-eq/-and`, `Invoke-WebRequest`, `ConvertTo-Json`, backtick continuations…) and CMD→Bash (`dir/del/copy/cls/type/findstr/%VAR%`…).
 - A failure catalogue: the real errors from the table above with their fixes, plus a runnable correct spelling.
-- The traps: a fresh process every time, no rc (so aliases like `ll`/`gst` do not exist), the silent `$env:` error, single-dash letter-by-letter parsing, process substitution being only partly available, `where` being `where.exe`, `bash`/`sh` being Niubash itself, `/tmp` living inside the install tree, long jobs belonging in the background, and heredoc bodies escaping the dialect lint when writing scripts.
+- The traps: a fresh process every time, no rc (so aliases like `ll`/`gst` do not exist), the silent `$env:` error, single-dash letter-by-letter parsing, process substitution being only partly available, `where` being `where.exe`, `bash`/`sh` being Niubash itself, `/tmp` living inside the install tree, long jobs belonging in the background, heredoc bodies escaping the dialect lint when writing scripts, and **commands running unconfined on the host** (treat `rm -rf` / `git clean` with the care you would use in your own terminal).
 
 Every ```bash block in the manual is run through **the real niu on this machine** by `test/guide.test.mjs`, so the examples are not "probably right" — they run.
 
 ## Development and verification
 
 ```sh
-node --test test/                 # 75 unit tests (guard / dialect preflight and hints / manual and inventory / resolution table / executor argv, boot probes and sandbox paths / teaching layer)
+node --test test/                 # 79 unit tests (guard / dialect preflight and hints / manual and inventory / resolution table / executor argv, boot probes and execution posture / teaching layer)
 node test/integration.mjs         # end to end: a scratch DSH_HOME, a real profile install, a real boot, 35 assertions
-node test/integration.mjs --mode workspace-write   # confined mode: the command assertions SKIP per "Sandbox modes and Niubash", everything else is asserted as usual
+node test/integration.mjs --mode workspace-write   # confined session: proves commands still run and the facts report `bypassed`
+node test/scratch/confined-diag.mjs workspace-write # switches the executor back to sandbox: true to reproduce the upstream limitation
 node dev/link-peers.mjs           # symlink this machine's @deepseek-ai/* into node_modules/ so a checkout can run the tests
 ```
 
-The integration test checks, in order: `ctx.shell` is the `NiubashExecutor`; the `niu --version` and `bash/sh` probes; **the boot smoke test really ran a command**; a shell builtin; a Unix-tool pipeline; a native Windows program; a non-zero exit reported as a result; **a foreign-shell handoff is refused**; **Niubash's own bash shim is allowed**; **the dialect preflight refuses `$env:PATH` and `ls -Recurse` and names the Bash form**; **a failed call carries a `Niubash hint`**; the system prompt carries the rules/manual/tables/failure catalogue/traps; the `bash`/`pwsh` descriptions and the parameter description are rewritten; **a shell tool inside a preset child scope is rewritten too**; and the sandbox facts are reported correctly. Point it at a specific CLI with `DSH_INTEGRATION_CLI=/path/to/@deepseek-ai/dsh/lib/bin.js`.
+The integration test checks, in order: `ctx.shell` is the `NiubashExecutor`; the `niu --version` and `bash/sh` probes; **the boot smoke test really ran a command**; a shell builtin; a Unix-tool pipeline; a native Windows program; a non-zero exit reported as a result; **a foreign-shell handoff is refused**; **Niubash's own bash shim is allowed**; **the dialect preflight refuses `$env:PATH` and `ls -Recurse` and names the Bash form**; **a failed call carries a `Niubash hint`**; the system prompt carries the rules/manual/tables/failure catalogue/traps; the `bash`/`pwsh` descriptions and the parameter description are rewritten; **a shell tool inside a preset child scope is rewritten too**; and **the sandbox facts are honest, including `bypassed` in a confined session**. Point it at a specific CLI with `DSH_INTEGRATION_CLI=/path/to/@deepseek-ai/dsh/lib/bin.js`.
 
 ## Troubleshooting
 
@@ -222,7 +234,8 @@ The integration test checks, in order: `ctx.shell` is the `NiubashExecutor`; the
 |---|---|
 | Boot fails with `cannot resolve the Niubash executable` | Install Niubash (it puts `niu.exe` on the user PATH) / set `niuPath` or `DSH_NIU_PATH` / restart the host so it re-reads the environment; to get moving, set `requireNiubash: false` |
 | Boot fails with `failed its --version probe` | `niu.exe` is not executable or is damaged; `verifyNiubash: false` skips the probe |
-| The boot log says `failed to open history provider … 拒绝访问`, and every later call fails the same way | A confined sandbox does not let `niu` write `$HOME/.niubash_history` (a Niubash host-layer limitation). Switch to `danger-full-access`, or make that file reachable from the sandbox; see "Sandbox modes and Niubash" |
+| The boot log says `failed to open history provider … 拒绝访问`, and every later call fails the same way | This only happens with `sandbox: true` in a confined session: a Niubash host-layer limitation (even `niu -c` opens the history file). Go back to the default `sandbox: false`, or use `danger-full-access`; see "Why the sandbox is off by default" |
+| A confined session writes outside the workspace, or `sandbox_permissions` does nothing | That is the default posture: commands run directly on the host, so no `[sandbox: …]` marker appears and escalation has no effect. Set `sandbox: true` if you need sandbox semantics (and accept the history-file limitation above) |
 | Boot fails with a duplicate `shell` service registration | Another shell-executor bundle (`dsh-nushell-only`, `@cmx666/dsh-winuxsh-bundle`…) is still installed or not disabled |
 | A tool call says `Niubash-only shell: refusing to hand this command to …` | The command calls `powershell`/`cmd`/`wsl`/`nu` or a non-Niubash `bash`; rewrite it in Bash as the message says, or use `foreignShellAllowlist` / `enforceNiubashOnly: false` when it is genuinely needed |
 | A tool call says `refusing a powershell-…` but the command really is valid Bash | A false positive: put the whole command in `foreignShellAllowlist`; every rule in `lib/dialect.js` carries an id, which makes it easy to locate |

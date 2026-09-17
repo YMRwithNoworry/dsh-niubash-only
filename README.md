@@ -15,7 +15,8 @@ Niubash 是 Windows 原生 shell：语言引擎是 rubash（GNU Bash 语义，`$
 1. **接管 `ctx.shell`（执行层）**
    `bash-sandbox` / `pwsh-sandbox` 两个第一方执行器被禁用，换成 `dsh-niubash-only/executor`：所有 shell 执行一律变成
    `niu -c "<command>"`。
-   换的是**能力接缝**（capability seam）而不是模型工具，所以 dsh 里所有走 `ctx.shell` 的消费者都会用 Niubash：模型工具、后台任务（`run_in_background`）、hook 桥（`dsh-hooks-*`）、`tmux-context`、以及任何进程内插件调用。超时、输出上限、spill 文件、后台句柄、取消、沙箱策略与拒绝事实全部沿用第一方实现（继承 `SandboxPwshExecutor` / `SandboxBashExecutor`，只替换 argv）。
+   换的是**能力接缝**（capability seam）而不是模型工具，所以 dsh 里所有走 `ctx.shell` 的消费者都会用 Niubash：模型工具、后台任务（`run_in_background`）、hook 桥（`dsh-hooks-*`）、`tmux-context`、以及任何进程内插件调用。超时、输出上限、spill 文件、后台句柄、取消与结果事实全部沿用第一方实现（继承 `SandboxPwshExecutor` / `SandboxBashExecutor`，只替换 argv）。
+   **执行位置默认直接在本机**：`ctx.sandbox` 不包裹、不拦截 `niu`（`sandbox: false`），因此受限会话里也照常可用；结果的 `sandbox` 事实会如实报 `mode: danger-full-access`，会话要求受限模式时另报 `bypassed: <该模式>`。要恢复第一方的沙箱包裹语义就设 `sandbox: true`（原因与上游修法见下文）。
    `niu -c` 是一发式命令域：**不加载 `~/.niubashrc`、不加载插件、不跑交互钩子、无 banner**，退出码原样传递——这正是 agent 需要的确定性契约。
 
 2. **拒绝"换个 shell 跑"（强制层）**
@@ -124,7 +125,8 @@ dsh --profile web --dump-config | grep -n niubash
     requireNiubash: true       # 找不到 niu 就启动失败（而不是每次调用都失败）
     verifyNiubash: true        # 启动时跑一次 `niu --version`
     probeNativeShells: true    # 探测本机 bash/sh 是否解析到 Niubash，决定是否放行
-    smokeTest: true            # 启动时跑一条真实命令，被沙箱挡住就当场把原因报出来
+    smokeTest: true            # 启动时跑一条真实命令，起不来就当场把原因报出来
+    sandbox: false             # 直接在本机运行：ctx.sandbox 不包裹、不拦截 niu
 
 - id: niubash-teaching
   name: dsh-niubash-only/teaching
@@ -146,8 +148,9 @@ dsh --profile web --dump-config | grep -n niubash
 | `dialectHints` | `true` | 失败时在 stderr 末尾追加一行 `Niubash hint (…)` |
 | `requireNiubash` | `true` | 无法解析 `niu` 时启动即失败 |
 | `verifyNiubash` / `verifyTimeoutMs` | `true` / `10000` | 启动探测 `niu --version` 及其超时 |
-| `smokeTest` | `true` | 启动时走一次真实调用路径（`echo niubash-smoke-ok`），把"沙箱挡住 `niu -c`"这类启动期故障写在启动日志里（见"沙箱模式与 Niubash"） |
+| `smokeTest` | `true` | 启动时走一次真实调用路径（`echo niubash-smoke-ok`），把"命令根本起不来"这类启动期故障写在启动日志里 |
 | `probeNativeShells` | `true` | 启动探测 `command -v bash; command -v sh`，据此决定 `bash`/`sh` 放行与否 |
+| `sandbox` | `false` | 是否让 `ctx.sandbox` 包裹 shell 命令。**默认关**：`niu` 直接在本机以 harness 进程的身份运行，结果的 `sandbox` 事实报 `mode: danger-full-access`，会话要了受限模式时额外报 `bypassed: <被忽略的模式>`。设为 `true` 则走第一方原来的包裹与拒绝判定（此时 Niubash 1.1.4 在受限模式下起不来，见下节） |
 
 **可执行文件解析顺序**：`niuPath` → `DSH_NIU_PATH` → `PATH` 里第一个含 `niu.exe` 的目录 → 已知安装目录（`%LOCALAPPDATA%\Programs\Niubash`、`%ProgramFiles%\Niubash`、`%ProgramFiles(x86)%\Niubash`）→ 裸 `niu.exe`。
 安装目录这一档是刻意的：Niubash 安装程序把目录加进**用户 PATH** 后广播环境变更，但已经在运行的 harness 进程仍持有启动时的环境——回退到文档化的安装目录，可以让部署不必重启宿主。
@@ -173,22 +176,30 @@ dsh --profile web --dump-config | grep -n niubash
 4. **`dsh-hooks-claude-code` / `dsh-hooks-codex` 的 hook 命令**。它们通过 `ctx.shell` 执行，现在就是 Niubash：**为 PowerShell 写的 hook 会失败**，为 Bash 写的 hook 正常工作。
 5. **TUI 的常驻 PTY shell**（`dsh-terminal-bash` + `dsh-tool-bash-persistent`）走的是 terminal 接缝，不是 `ctx.shell`，插件不替换它。
 
-沙箱与权限不变：`danger-full-access` 直接执行，受限模式仍然经 `ctx.sandbox.confine()` 包裹 Niubash 的 argv，并照常上报 `mode` / `denied` / `enforcement` 事实。
+命令的执行位置：**默认直接在本机运行**，不经文件沙箱（`sandbox: false`）。`niu` 以 harness 进程的身份被 spawn，能读写 harness 能读写的一切；配套地，结果的 `sandbox` 事实报 `mode: danger-full-access`（会话若要求受限模式，另报 `bypassed: <该模式>`），提示词里也不再承诺会出现 `[sandbox: …]` 标记或 `sandbox_permissions` 生效。要恢复第一方的包裹语义就设 `sandbox: true`。
 
-## 沙箱模式与 Niubash
+## 为什么默认不走沙盒（附上游修法）
 
-`niu -c` 在构造 shell 时会打开 `$HOME/.niubash_history`——哪怕这一发命令根本不需要历史。受限沙箱（`workspace-write` / `read-only`）不允许写工作区以外的路径，于是 `niu` 在跑任何命令**之前**就退出：
+这不是偷懒，而是 Niubash 1.1.4 目前与受限沙箱互斥：`niu -c` 在构造 shell 时会打开 `$HOME/.niubash_history`——哪怕这一发命令根本不需要历史。受限沙箱（`workspace-write` / `read-only`）不允许访问工作区以外的路径，于是 `niu` 在跑任何命令**之前**就退出：
 
 ```text
 niu: failed to open history provider C:\Users\me\.niubash_history: I/O error: 拒绝访问。 (os error 5)
 ```
 
-这是 Niubash 宿主层的限制，不是插件拒绝执行：插件既不能替它跳过历史文件，也不该在这种模式下假装一切正常。所以：
+代码位置：`src/main.rs` 的 `-c` 分支仍然调用 `Shell::new`，而 `Shell::new` 里会构建 history provider（`crates/niubash-runtime/src/shell.rs` → `RubashHistoryProvider::with_file`）。复现脚本：`node test/scratch/confined-diag.mjs workspace-write`（它会把执行器切回 `sandbox: true`，逐条打印结果）。
 
-- 执行器启动时跑一次**冒烟测试**（`smokeTest: true`，默认开）。它走的正是模型工具调用那条路径（`run(resolve({ command }))`），因此真被沙箱挡住时，启动日志里会**当场**出现上面那行原因与两个可行做法——改用 `danger-full-access` 权限档，或让沙箱能访问历史文件——而不是等到每次工具调用都报同一句难懂的错。
-- 这条事实通过 shell 服务的 `niuSmoke`（`{ ok, detail }`）暴露给进程内消费者。集成测试据此把"需要真命令"的断言标成 SKIP 而不是 FAIL，但**仍然逐条验证**拒绝类行为（外部 shell handoff、方言预检）与提示词装配——它们都发生在 spawn 之前，与沙箱无关。
+所以插件给了两个姿势：
 
-**结论**：在 Windows 上用 Niubash 跑 dsh，请把权限档设为 `danger-full-access`（`DSH_PERMISSION_MODE=danger-full-access`，或 web UI 里的同名权限预设）。本机实测：`danger-full-access` 下集成测试 35/35 全过；`workspace-write` 下 26/26 通过 + 8 条 SKIP，SKIP 全部由上面这条限制解释。
+| 姿势 | 行为 | 适用 |
+|---|---|---|
+| `sandbox: false`（默认） | `niu` 直接在本机跑，`ctx.sandbox` 完全不参与；受限会话照常工作 | 本机开发、需要受限档的会话 |
+| `sandbox: true` | 走第一方包裹与拒绝判定；此时受限模式下每条命令都会因上面的历史文件失败 | 需要沙箱语义的部署（等 Niubash 修好上游之后） |
+
+上游修法很小：`niu -c` 根本不需要 history——在 `-c` 路径跳过 history provider 初始化，或让 `NIU_HISTORY_PATH` / `--no-history` 能覆盖它。修好之后把 `sandbox: true` 打开即可回到受限执行。
+
+插件不会假装这件事不存在：启动冒烟测试（`smokeTest: true`，默认开）走的是模型工具调用那条真实路径，因此一旦命令起不来，启动日志里就**当场**出现原因与修法；这条事实也通过 shell 服务的 `niuSmoke`（`{ ok, detail }`）暴露给进程内消费者。
+
+**本机实测**：`danger-full-access` 与 `workspace-write` 两种模式下集成测试都是 **35/35 全过**；后者的断言里明确验证了"受限会话仍能跑命令，且结果报 `bypassed: "workspace-write"`"。
 
 ## 教学层给了模型什么
 
@@ -201,20 +212,21 @@ niu: failed to open history provider C:\Users\me\.niubash_history: I/O error: �
 - 管道/重定向/退出码：`> >> 2> 2>&1 2>/dev/null &>`、`/dev/null` 与 `nul`、退出码原样、`pipefail`、以及"失败的命令不会自动中断后续"。
 - 对照表：PowerShell→Bash（30 行，含 `$env:NAME`、`Get-*`、`Select-Object -First`、`-eq/-and`、`Invoke-WebRequest`、`ConvertTo-Json`、反引号续行…）与 CMD→Bash（`dir/del/copy/cls/type/findstr/%VAR%`…）。
 - 失败目录：上表那些真实报错与修法，附一段可运行的正确写法。
-- 坑：每次全新进程、rc 不加载（`ll`/`gst` 这类 alias 不存在）、`$env:` 静默错误、单横线逐字母、进程替换只部分可用、`where` 是 `where.exe`、`bash`/`sh` 就是 Niubash 自己、`/tmp` 在安装树里、长任务用后台 job、写脚本时 heredoc 体不受方言检查。
+- 坑：每次全新进程、rc 不加载（`ll`/`gst` 这类 alias 不存在）、`$env:` 静默错误、单横线逐字母、进程替换只部分可用、`where` 是 `where.exe`、`bash`/`sh` 就是 Niubash 自己、`/tmp` 在安装树里、长任务用后台 job、写脚本时 heredoc 体不受方言检查，以及**命令直接在本机运行、没有沙箱兜底**（`rm -rf`/`git clean` 这类要按自己终端里的谨慎度对待）。
 
 手册里的每个 ```bash 代码块都会被 `test/guide.test.mjs` 用**本机真实的 niu** 跑一遍，所以例子不是"看起来对"，而是跑得通。
 
 ## 开发与验证
 
 ```sh
-node --test test/                 # 75 个单元测试（守卫 / 方言预检与提示 / 手册与工具清单 / 解析决策表 / 执行器 argv、启动探测与沙箱路径 / 教学层）
+node --test test/                 # 79 个单元测试（守卫 / 方言预检与提示 / 手册与工具清单 / 解析决策表 / 执行器 argv、启动探测与执行姿势 / 教学层）
 node test/integration.mjs         # 端到端：建临时 DSH_HOME、装 profile、真实启动、35 项断言
-node test/integration.mjs --mode workspace-write   # 受限沙箱模式：命令类断言按"沙箱模式与 Niubash"那条限制 SKIP，其余照常断言
+node test/integration.mjs --mode workspace-write   # 受限会话：验证"仍能跑命令 + 结果如实报 bypassed"
+node test/scratch/confined-diag.mjs workspace-write # 把执行器切回 sandbox: true，复现上游的历史文件限制
 node dev/link-peers.mjs           # 把本机 dsh 安装里的 @deepseek-ai/* 软链到 node_modules/，供 checkout 直接跑测试
 ```
 
-集成测试会依次验证：`ctx.shell` 就是 `NiubashExecutor`、`niu --version` 与 `bash/sh` 探测、**启动冒烟测试真跑通一条命令**、shell 内建、Unix 工具管道、原生 Windows 程序、非零退出以结果上报、**外部 shell handoff 被拒**、**Niubash 自己的 bash shim 放行**、**方言预检拒绝 `$env:PATH` 与 `ls -Recurse` 并给出 Bash 写法**、**失败调用带回 `Niubash hint`**、系统提示含规则/手册/对照表/失败目录/坑、`bash`/`pwsh` 描述与参数说明已改写、**preset 子 scope 里的 shell 工具同样被改写**、沙箱事实正确上报。可用 `DSH_INTEGRATION_CLI=/path/to/@deepseek-ai/dsh/lib/bin.js` 指定要驱动的 CLI。
+集成测试会依次验证：`ctx.shell` 就是 `NiubashExecutor`、`niu --version` 与 `bash/sh` 探测、**启动冒烟测试真跑通一条命令**、shell 内建、Unix 工具管道、原生 Windows 程序、非零退出以结果上报、**外部 shell handoff 被拒**、**Niubash 自己的 bash shim 放行**、**方言预检拒绝 `$env:PATH` 与 `ls -Recurse` 并给出 Bash 写法**、**失败调用带回 `Niubash hint`**、系统提示含规则/手册/对照表/失败目录/坑、`bash`/`pwsh` 描述与参数说明已改写、**preset 子 scope 里的 shell 工具同样被改写**、**沙箱事实如实上报（含受限会话的 `bypassed`）**。可用 `DSH_INTEGRATION_CLI=/path/to/@deepseek-ai/dsh/lib/bin.js` 指定要驱动的 CLI。
 
 ## 排错
 
@@ -222,7 +234,8 @@ node dev/link-peers.mjs           # 把本机 dsh 安装里的 @deepseek-ai/* �
 |---|---|
 | 启动报 `cannot resolve the Niubash executable` | 装 Niubash（它会把 `niu.exe` 放进用户 PATH）/ 设 `niuPath` 或 `DSH_NIU_PATH` / 启动宿主重读环境；临时先跑可设 `requireNiubash: false` |
 | 启动报 `failed its --version probe` | `niu.exe` 不可执行或损坏；`verifyNiubash: false` 可跳过探测 |
-| 启动日志报 `failed to open history provider … 拒绝访问`，之后每次调用都同样失败 | 受限沙箱不让 `niu` 写 `$HOME/.niubash_history`（Niubash 宿主层限制）。改用 `danger-full-access`，或让沙箱能访问该文件；详见"沙箱模式与 Niubash" |
+| 启动日志报 `failed to open history provider … 拒绝访问`，之后每次调用都同样失败 | 这只会出现在你把 `sandbox` 打开（`sandbox: true`）且会话是受限模式时：Niubash 宿主层限制（`niu -c` 也要开历史文件）。改回默认的 `sandbox: false`，或改用 `danger-full-access`；详见"为什么默认不走沙盒" |
+| 工具调用报 `Niubash-only shell: sandbox_permissions 没用` / 明明是受限会话却写成功了 | 这是默认姿势：命令直接在本机运行，`sandbox_permissions` 不生效、也不会出现 `[sandbox: …]` 标记；需要沙箱语义就设 `sandbox: true`（并接受上面的历史文件限制） |
 | 启动报重复注册 `shell` 服务 | 还有别的 shell 执行器 bundle（`dsh-nushell-only`、`@cmx666/dsh-winuxsh-bundle`…）没卸掉或没禁用 |
 | 工具调用报 `Niubash-only shell: refusing to hand this command to …` | 命令里在调 `powershell`/`cmd`/`wsl`/`nu` 或非 Niubash 的 `bash`；按提示改写成 Bash，或确有需要时用 `foreignShellAllowlist` / `enforceNiubashOnly: false` |
 | 工具调用报 `refusing a powershell-…`，但命令其实是合法 Bash | 误判：把整条命令写进 `foreignShellAllowlist`；`lib/dialect.js` 的规则都带 id，便于定位 |

@@ -19,9 +19,9 @@ the deployment to be genuinely Niubash-only. Two common shapes:
 ```
 
 ```yaml
-# After: disabled. The platform's first-party shell tool remains
-# (`tool-pwsh` on Windows, `tool-bash` on POSIX) and now executes Niubash,
-# because `ctx.shell` is the Niubash executor.
+# After: disabled. The first-party `bash` tool remains (this bundle disables
+# `tool-pwsh` and mounts `tool-bash`, whose dialect is exactly what Niubash
+# speaks) and now executes Niubash, because `ctx.shell` is the Niubash executor.
 - id: custom-bash
   name: ./custom-bash.mjs
   disabled: true
