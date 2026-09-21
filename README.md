@@ -70,7 +70,10 @@ Niubash 是 Windows 原生 shell：语言引擎是 rubash（GNU Bash 语义，`$
 ## 安装
 
 ```sh
-# 从 GitHub 直接安装进某个 profile（推荐，不需要 npm 发布）
+# 从 npm 安装（已发布）
+dsh plugin --profile web add dsh-niubash-only
+
+# 从 GitHub 直接安装进某个 profile（想跟仓库走，或需要未发布的提交）
 dsh plugin --profile web add github:YMRwithNoworry/dsh-niubash-only
 
 # 锁定提交可复现（可选）

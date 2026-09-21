@@ -70,7 +70,10 @@ The tool inventory is measured the same way (`test/guide.test.mjs` asserts that 
 ## Install
 
 ```sh
-# Install straight from GitHub into a profile (recommended; no npm release needed)
+# Install from npm (published)
+dsh plugin --profile web add dsh-niubash-only
+
+# Install straight from GitHub into a profile (to track the repo, or an unreleased commit)
 dsh plugin --profile web add github:YMRwithNoworry/dsh-niubash-only
 
 # Pin a commit for reproducibility (optional)
