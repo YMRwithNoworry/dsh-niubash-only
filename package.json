@@ -1,7 +1,7 @@
 {
   "name": "dsh-niubash-only",
-  "version": "0.1.0",
-  "description": "Niubash-only shell executor and Bash-dialect teaching for DeepSeek Harness (dsh 0.1.5-rc.2): every ctx.shell execution runs as `niu -c`, PowerShell/cmd/WSL/nu handoffs are refused, PowerShell habits are refused before they spawn, a failed call carries an actionable hint, and the model is taught what Niubash on Windows actually supports.",
+  "version": "0.2.0",
+  "description": "Niubash-only shell executor and Bash-dialect teaching for DeepSeek Harness (dsh 0.1.7-rc.1): every ctx.shell execution runs as `niu -c`, PowerShell/cmd/WSL/nu handoffs are refused, PowerShell habits are refused before they spawn, a failed call carries an actionable hint, and the model is taught what Niubash on Windows actually supports.",
   "license": "MIT",
   "author": "dsh-niubash-only contributors",
   "type": "module",
@@ -71,13 +71,14 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-bash-sandbox": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-pwsh-sandbox": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-sandbox": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-sandbox-policy": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-shell": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-subprocess": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.5-rc.2"
+    "@deepseek-ai/dsh-bash-sandbox": "^0.1.7-rc.1",
+    "@deepseek-ai/dsh-pwsh-sandbox": "^0.1.7-rc.1",
+    "@deepseek-ai/dsh-sandbox": "^0.1.7-rc.1",
+    "@deepseek-ai/dsh-sandbox-policy": "^0.1.7-rc.1",
+    "@deepseek-ai/dsh-shell": "^0.1.7-rc.1",
+    "@deepseek-ai/dsh-subprocess": "^0.1.7-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.7-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.4"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {
@@ -102,6 +103,9 @@
       "optional": true
     },
     "@deepseek-ai/dsh-system-prompt": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
       "optional": true
     }
   }

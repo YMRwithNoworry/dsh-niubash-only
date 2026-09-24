@@ -1,4 +1,4 @@
-# dsh-niubash-only — profile bundle patch (dsh 0.1.5-rc.2)
+# dsh-niubash-only — profile bundle patch (dsh 0.1.7-rc.1)
 #
 # 1. Disable every first-party `ctx.shell` provider (and the PowerShell tool
 #    row). Exactly one provider may register that service, so replacing both
@@ -12,6 +12,11 @@
 # The teaching layer rewrites the shell tool's description (and its `command`
 # parameter) into what Niubash actually supports on Windows, and adds the
 # syntax guide to the system prompt.
+#
+# On the 0.1.7 line the seam has ONE execution verb — `execute(spec)` returning a
+# live handle whose `result()` is the foreground projection — and the inserted
+# executor implements exactly that, so every consumer (foreground tool calls,
+# background jobs, hooks, tmux context, in-process callers) reaches Niubash.
 #
 # If another third-party Niubash/Winuxsh bundle is installed (for example
 # `@cmx666/dsh-winuxsh-bundle`, whose `winuxsh-sandbox` row is also a

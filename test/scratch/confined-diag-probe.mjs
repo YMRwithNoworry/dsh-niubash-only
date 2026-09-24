@@ -28,7 +28,7 @@ export async function apply(ctx) {
   ]
   for (const command of commands) {
     try {
-      const result = await shell.run(shell.resolve({ command }))
+      const result = await (await shell.execute(shell.resolve({ command }))).result()
       const stderr = (result.stderr?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)
       console.log(`DIAG ${JSON.stringify(command)} exit=${result.exitCode} sandbox=${result.sandbox?.mode} out=${JSON.stringify((result.stdout?.text ?? '').trim().slice(0, 40))} err=${JSON.stringify(stderr)}`)
     } catch (error) {

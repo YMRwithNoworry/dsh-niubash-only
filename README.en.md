@@ -4,7 +4,7 @@
 
 A Profile Bundle that makes [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) run **Niubash as its only shell**, and **teaches the model to write the Bash Niubash supports**.
 
-Target: **dsh `0.1.5-rc.2`** (measured against both the CLI and the libraries; `0.1.5-rc.1` works too). Runtime requirements: Node `>=22.19.0` and [Niubash](https://github.com/unixwin/niubash) (measured with `Niubash 1.1.4` + `WinuxCmd 1.0.8` on Windows 10/11).
+Target: **dsh `0.1.7-rc.1`** (measured against both the CLI and the libraries; the `0.1.5-rc.2`/`0.1.5-rc.1` line works too — see "The seam versions"). Runtime requirements: Node `>=22.19.0` and [Niubash](https://github.com/unixwin/niubash) (measured with `Niubash 1.1.4` + `WinuxCmd 1.0.8` on Windows 10/11).
 
 Niubash is a Windows-native shell: the language engine is rubash (GNU Bash semantics, `$BASH_VERSION=5.3.0(1)-release`) and the Unix commands come from WinuxCmd (`ls`/`grep`/`sed`/`find`… are real binaries on `PATH`), all carried by one `niu.exe`. This plugin routes **every** shell execution in dsh through it.
 
@@ -16,6 +16,7 @@ One plugin, five cooperating parts:
    The two first-party executors `bash-sandbox` / `pwsh-sandbox` are disabled and replaced by `dsh-niubash-only/executor`: every shell execution becomes
    `niu -c "<command>"`.
    It swaps the **capability seam** rather than the model tool, so every consumer in dsh that goes through `ctx.shell` uses Niubash: the model tools, background jobs (`run_in_background`), the hook bridges (`dsh-hooks-*`), `tmux-context`, and any in-process plugin call. Timeouts, output caps, spill files, background handles, cancellation and result facts all stay on the first-party implementation (it extends `SandboxPwshExecutor` / `SandboxBashExecutor` and only replaces argv).
+   Since dsh `0.1.7-rc.1` the seam has **one execution verb**, `execute(spec) -> ShellExecution` — the live process handle plus the memoized foreground projection `result()`, where "foreground" is a property of what the caller awaits, not of the spawn; the `run`/`start`/`runArgv`/`startArgv` set of the 0.1.5 line is gone. This plugin implements that verb, so foreground tool calls, background jobs, hooks and in-process callers all get the same handle contract.
    **Commands run directly on the host by default**: `ctx.sandbox` never wraps or blocks `niu` (`sandbox: false`), so even a confined session keeps working; the settled facts honestly report `mode: danger-full-access`, plus `bypassed: <mode>` when the session asked for confinement. Set `sandbox: true` to restore the first-party wrapping semantics (see below for why, and for the upstream fix).
    `niu -c` is a one-shot command domain: it loads **no `~/.niubashrc`, no plugins, no interactive hooks, no banner**, and passes the exit code through unchanged — exactly the deterministic contract an agent needs.
 
@@ -202,7 +203,7 @@ The upstream fix is small: `niu -c` needs no history at all — skip the history
 
 The plugin does not pretend otherwise: the boot smoke test (`smokeTest: true`, on by default) takes exactly the path a model tool call takes, so a shell that cannot start says why **at boot**, and the fact is exposed to in-process consumers as `niuSmoke` (`{ ok, detail }`).
 
-**Measured on this machine**: the integration test passes **35/35 under both `danger-full-access` and `workspace-write`**; the confined run explicitly asserts that a confined session still runs commands and that the result reports `bypassed: "workspace-write"`.
+**Measured on this machine**: the integration test passes **39/39 under both `danger-full-access` and `workspace-write`**; the confined run explicitly asserts that a confined session still runs commands and that the result reports `bypassed: "workspace-write"`.
 
 ## What the teaching layer gives the model
 
@@ -222,8 +223,8 @@ Every ```bash block in the manual is run through **the real niu on this machine*
 ## Development and verification
 
 ```sh
-node --test test/                 # 79 unit tests (guard / dialect preflight and hints / manual and inventory / resolution table / executor argv, boot probes and execution posture / teaching layer)
-node test/integration.mjs         # end to end: a scratch DSH_HOME, a real profile install, a real boot, 35 assertions
+node --test test/                 # 84 unit tests (guard / dialect preflight and hints / manual and inventory / resolution table / executor argv, boot probes and execution posture / teaching layer)
+node test/integration.mjs         # end to end: a scratch DSH_HOME, a real profile install, a real boot, 39 assertions
 node test/integration.mjs --mode workspace-write   # confined session: proves commands still run and the facts report `bypassed`
 node test/scratch/confined-diag.mjs workspace-write # switches the executor back to sandbox: true to reproduce the upstream limitation
 node dev/link-peers.mjs           # symlink this machine's @deepseek-ai/* into node_modules/ so a checkout can run the tests

@@ -4,7 +4,7 @@
 
 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的**唯一 shell 换成 Niubash**，并**教会模型写 Niubash 支持的 Bash** 的 Profile Bundle。
 
-适配版本：**dsh `0.1.5-rc.2`**（CLI 与库均实测通过；`0.1.5-rc.1` 亦可）。运行时要求 Node `>=22.19.0` 与 [Niubash](https://github.com/unixwin/niubash)（实测 `Niubash 1.1.4` + `WinuxCmd 1.0.8`，Windows 10/11）。
+适配版本：**dsh `0.1.7-rc.1`**（CLI 与库均实测通过；`0.1.5-rc.2`/`0.1.5-rc.1` 亦可，见"接缝版本"）。运行时要求 Node `>=22.19.0` 与 [Niubash](https://github.com/unixwin/niubash)（实测 `Niubash 1.1.4` + `WinuxCmd 1.0.8`，Windows 10/11）。
 
 Niubash 是 Windows 原生 shell：语言引擎是 rubash（GNU Bash 语义，`$BASH_VERSION=5.3.0(1)-release`），Unix 命令来自 WinuxCmd（`ls`/`grep`/`sed`/`find`… 是真二进制，在 `PATH` 上），一个 `niu.exe` 全包。本插件让 dsh 里**每一次** shell 执行都走它。
 
@@ -16,6 +16,7 @@ Niubash 是 Windows 原生 shell：语言引擎是 rubash（GNU Bash 语义，`$
    `bash-sandbox` / `pwsh-sandbox` 两个第一方执行器被禁用，换成 `dsh-niubash-only/executor`：所有 shell 执行一律变成
    `niu -c "<command>"`。
    换的是**能力接缝**（capability seam）而不是模型工具，所以 dsh 里所有走 `ctx.shell` 的消费者都会用 Niubash：模型工具、后台任务（`run_in_background`）、hook 桥（`dsh-hooks-*`）、`tmux-context`、以及任何进程内插件调用。超时、输出上限、spill 文件、后台句柄、取消与结果事实全部沿用第一方实现（继承 `SandboxPwshExecutor` / `SandboxBashExecutor`，只替换 argv）。
+   自 dsh `0.1.7-rc.1` 起接缝只剩**一个执行动词** `execute(spec) -> ShellExecution`（活进程句柄 + 记忆化的前台投影 `result()`；"前台/后台"由调用方是否 await `result()` 决定），0.1.5 那一代的 `run`/`start`/`runArgv`/`startArgv` 已不存在——本插件实现的就是这个新动词，前台调用、后台任务、hook 与进程内调用拿到的是同一个句柄契约。
    **执行位置默认直接在本机**：`ctx.sandbox` 不包裹、不拦截 `niu`（`sandbox: false`），因此受限会话里也照常可用；结果的 `sandbox` 事实会如实报 `mode: danger-full-access`，会话要求受限模式时另报 `bypassed: <该模式>`。要恢复第一方的沙箱包裹语义就设 `sandbox: true`（原因与上游修法见下文）。
    `niu -c` 是一发式命令域：**不加载 `~/.niubashrc`、不加载插件、不跑交互钩子、无 banner**，退出码原样传递——这正是 agent 需要的确定性契约。
 
@@ -202,7 +203,7 @@ niu: failed to open history provider C:\Users\me\.niubash_history: I/O error: �
 
 插件不会假装这件事不存在：启动冒烟测试（`smokeTest: true`，默认开）走的是模型工具调用那条真实路径，因此一旦命令起不来，启动日志里就**当场**出现原因与修法；这条事实也通过 shell 服务的 `niuSmoke`（`{ ok, detail }`）暴露给进程内消费者。
 
-**本机实测**：`danger-full-access` 与 `workspace-write` 两种模式下集成测试都是 **35/35 全过**；后者的断言里明确验证了"受限会话仍能跑命令，且结果报 `bypassed: "workspace-write"`"。
+**本机实测**：`danger-full-access` 与 `workspace-write` 两种模式下集成测试都是 **39/39 全过**；后者的断言里明确验证了"受限会话仍能跑命令，且结果报 `bypassed: "workspace-write"`"。
 
 ## 教学层给了模型什么
 
@@ -222,8 +223,8 @@ niu: failed to open history provider C:\Users\me\.niubash_history: I/O error: �
 ## 开发与验证
 
 ```sh
-node --test test/                 # 79 个单元测试（守卫 / 方言预检与提示 / 手册与工具清单 / 解析决策表 / 执行器 argv、启动探测与执行姿势 / 教学层）
-node test/integration.mjs         # 端到端：建临时 DSH_HOME、装 profile、真实启动、35 项断言
+node --test test/                 # 84 个单元测试（守卫 / 方言预检与提示 / 手册与工具清单 / 解析决策表 / 执行器 argv、启动探测与执行姿势 / 教学层）
+node test/integration.mjs         # 端到端：建临时 DSH_HOME、装 profile、真实启动、39 项断言
 node test/integration.mjs --mode workspace-write   # 受限会话：验证"仍能跑命令 + 结果如实报 bypassed"
 node test/scratch/confined-diag.mjs workspace-write # 把执行器切回 sandbox: true，复现上游的历史文件限制
 node dev/link-peers.mjs           # 把本机 dsh 安装里的 @deepseek-ai/* 软链到 node_modules/，供 checkout 直接跑测试

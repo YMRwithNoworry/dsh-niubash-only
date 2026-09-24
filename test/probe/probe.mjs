@@ -42,6 +42,19 @@ function skip(name, reason) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+/**
+ * Run one command through the seam and settle its foreground projection. On the
+ * 0.1.7 line there is exactly one verb: `execute(spec)` resolves with the live
+ * handle, and `result()` is the foreground result.
+ * @param shell - the live `ctx.shell` service.
+ * @param command - Bash source.
+ * @returns the settled {@link ShellRunResult}.
+ */
+async function shellRun(shell, command) {
+  const handle = await shell.execute(shell.resolve({ command }))
+  return handle.result()
+}
+
 /** The assembled tool schema for one name, from the live prompt registry. */
 function toolOf(assembly, name) {
   return assembly.tools.find((tool) => tool.name === name)
@@ -81,6 +94,7 @@ export async function apply(ctx) {
     record('shell service is the Niubash executor', shell?.constructor?.name === 'NiubashExecutor', shell?.constructor?.name)
     record('probed Niubash version', typeof shell.niuVersion === 'string', shell.niuVersion ?? '(unknown)')
     record('Niubash-owned bash/sh were probed', (shell.niuNativeShells?.names ?? []).length > 0, (shell.niuNativeShells?.names ?? []).join(','))
+    record('the shell service exposes the 0.1.7 execution seam', typeof shell.execute === 'function' && typeof shell.resolve === 'function')
 
     // An agent preset mounts its own shell tool inside a child scope. Teaching
     // has to reach it: the waterfall listener runs at the root, and a root
@@ -146,10 +160,10 @@ export async function apply(ctx) {
       skip('allows Niubash\'s own bash shim', blockedReason)
       skip('a failed call carries a Niubash hint', blockedReason)
     } else {
-      const builtin = await shell.run(shell.resolve({ command: 'echo "hello from niubash"' }))
+      const builtin = await shellRun(shell, 'echo "hello from niubash"')
       record('runs a shell builtin', builtin.exitCode === 0 && /hello from niubash/.test(builtin.stdout.text), builtin.stdout.text)
 
-      const pipeline = await shell.run(shell.resolve({ command: "printf 'beta\\nalpha\\n' | sort | head -1" }))
+      const pipeline = await shellRun(shell, "printf 'beta\\nalpha\\n' | sort | head -1")
       record('runs a Unix-tool pipeline', pipeline.exitCode === 0 && pipeline.stdout.text.trim() === 'alpha', pipeline.stdout.text)
 
       // The bundle's posture: `niu` runs directly on the host. In a session whose
@@ -166,27 +180,35 @@ export async function apply(ctx) {
         )
       }
 
-      const external = await shell.run(shell.resolve({ command: 'git --version' }))
+      const external = await shellRun(shell, 'git --version')
       record('runs a native Windows program', external.exitCode === 0 && /git version/.test(external.stdout.text), external.stdout.text)
 
-      const failure = await shell.run(shell.resolve({ command: 'exit 3' }))
+      const failure = await shellRun(shell, 'exit 3')
       record('reports a non-zero exit instead of throwing', failure.exitCode === 3, `exit ${failure.exitCode}`)
 
       // Niubash's own bash shim is the same engine, so it is allowed once the
       // boot probe proved what `bash` resolves to.
-      const nested = await shell.run(shell.resolve({ command: 'bash -c "echo nested-ok"' }))
+      const nested = await shellRun(shell, 'bash -c "echo nested-ok"')
       record('allows Niubash\'s own bash shim', nested.exitCode === 0 && /nested-ok/.test(nested.stdout.text), nested.stdout.text)
 
       // Post-failure hinting: an error the preflight cannot predict still comes
       // back with one actionable line naming the fix.
-      const hinted = await shell.run(shell.resolve({ command: "awk '{print $1}' package.json" }))
+      const hinted = await shellRun(shell, "awk '{print $1}' package.json")
       record('a failed call carries a Niubash hint', /Niubash hint \(missing-program\)/.test(hinted.stderr.text), hinted.stderr.text.replace(/\s+/g, ' ').slice(0, 160))
       record('the hint names a concrete replacement', /not installed in this Niubash deployment/.test(hinted.stderr.text))
+
+      // The background half of the seam: `execute` hands back the live process,
+      // and the caller owns when it stops (the jobs layer promotes on timeout).
+      const background = await shell.execute(shell.resolve({ command: 'sleep 60; echo never', onExpiry: 'none' }))
+      record('a background execution returns a live Niubash process', background.status === 'running', background.status)
+      record('a background Niubash process can be killed', background.kill() === true)
+      await background.done
+      record('a killed background process settles as killed', background.status === 'killed', background.status)
     }
 
     let refused = ''
     try {
-      await shell.run(shell.resolve({ command: 'pwsh -Command Get-ChildItem' }))
+      await shellRun(shell, 'pwsh -Command Get-ChildItem')
     } catch (error) {
       refused = error instanceof Error ? error.message : String(error)
     }
@@ -197,7 +219,7 @@ export async function apply(ctx) {
     // `$env:NAME`, silently print the wrong text) are refused before spawning.
     let dialectRefusal = ''
     try {
-      await shell.run(shell.resolve({ command: 'echo $env:PATH' }))
+      await shellRun(shell, 'echo $env:PATH')
     } catch (error) {
       dialectRefusal = error instanceof Error ? error.message : String(error)
     }
@@ -206,7 +228,7 @@ export async function apply(ctx) {
 
     let flagRefusal = ''
     try {
-      await shell.run(shell.resolve({ command: 'ls -Recurse' }))
+      await shellRun(shell, 'ls -Recurse')
     } catch (error) {
       flagRefusal = error instanceof Error ? error.message : String(error)
     }

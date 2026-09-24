@@ -3,6 +3,10 @@
  * failure hint, and the confined and full-access paths — driven through a
  * stand-in subprocess seam, so no dsh boot and no real command is needed.
  *
+ * Since dsh `0.1.7-rc.1` the shell seam has one execution verb, `execute(spec)`,
+ * which resolves with a live handle whose `result()` is the memoized foreground
+ * projection; these tests drive that contract.
+ *
  * The `@deepseek-ai/*` peer packages the executor extends are resolved from the
  * dsh installation that `dev/link-peers.mjs` links into `node_modules/` for
  * local development.
@@ -10,8 +14,9 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { NATIVE_SHELL_PROBE, NiubashExecutor } from '../lib/executor.js'
+import Schema from '@deepseek-ai/schemastery'
 import { Service } from '@deepseek-ai/cordis'
+import { NATIVE_SHELL_PROBE, NiubashExecutor } from '../lib/executor.js'
 import { niuRuntime, parseNativeShells } from '../lib/niubash.js'
 
 /** The boot probe's answer on this machine: Niubash's own rubash shims. */
@@ -20,46 +25,59 @@ const NATIVE = parseNativeShells([
   '/c/Users/me/AppData/Local/Programs/Niubash/winuxcmd/usr/bin/sh.exe',
 ].join('\n'))
 
-/** A `ctx.subprocess` handle: collects what the executor asked for, never spawns. */
-function fakeSubprocess({ exitCode = 0, stdout = 'ok', stderr = '', fail = false } = {}) {
+/**
+ * A `ctx.subprocess` handle: collects what the executor asked for, never spawns.
+ *
+ * `defer: true` keeps the process alive until the returned handle's `release()`
+ * is called, so a test can observe the live state a real, still-running child
+ * would show.
+ */
+function fakeSubprocess({ exitCode = 0, stdout = 'ok', stderr = '', fail = false, defer = false } = {}) {
   const spawns = []
+  const procs = []
   const reader = (text) => ({ readFrom: () => ({ text, lossy: false, nextOffset: text.length }) })
   const spawn = (spec) => {
     spawns.push(spec)
+    let release
+    const outcome = defer ? new Promise((resolve) => { release = resolve }) : Promise.resolve()
     const proc = {
       status: 'running',
       exitCode: null,
       signal: null,
       done: fail
         ? Promise.reject(new Error('spawn failed'))
-        : Promise.resolve({ exitCode, signal: null }),
+        : outcome.then(() => ({ exitCode, signal: null })),
       collected: {
         stdout: reader(stdout),
         stderr: reader(stderr),
       },
+      release: () => release?.(),
       terminate() {
         proc.status = 'killed'
       },
     }
+    procs.push(proc)
     return proc
   }
-  return { spawn, spawns }
+  return { spawn, spawns, procs }
 }
 
 /** A `ctx` stand-in covering the services the executor and its base class touch. */
 function fakeContext({ subprocess, sandboxMode = 'danger-full-access', confine = (argv) => argv } = {}) {
   const confined = []
-  const warnings = []
   const ctx = {
     inject() {},
     // The cordis `Service` base class registers itself through `ctx.reflect.provide`.
     reflect: { provide: () => () => {} },
     get: () => undefined,
     subprocess,
-    sandboxPolicy: { resolve: () => ({ mode: sandboxMode, workspaceRoot: process.cwd() }) },
+    sandboxPolicy: {
+      defaultMode: sandboxMode,
+      resolve: () => ({ mode: sandboxMode, workspaceRoot: process.cwd() }),
+    },
     sandbox: {
-      confine(argv, policy) {
-        confined.push({ argv, policy })
+      confine(argv, policy, signal) {
+        confined.push({ argv, policy, signal })
         return {
           argv: confine(argv, policy),
           enforcement: 'strict',
@@ -68,9 +86,9 @@ function fakeContext({ subprocess, sandboxMode = 'danger-full-access', confine =
         }
       },
     },
-    logger: { info() {}, warn(message) { warnings.push(message) } },
+    logger: { info() {}, warn() {} },
   }
-  return { ctx, confined, warnings }
+  return { ctx, confined }
 }
 
 const baseConfig = {
@@ -86,12 +104,27 @@ const baseConfig = {
   probeNativeShells: false,
 }
 
+/**
+ * Resolve a config the way the cordis plugin loader does. The inherited
+ * executor schema declares its budget fields `volatile`, so the base class reads
+ * them through `.get()` and only a schema-resolved config is serviceable.
+ */
+function resolveConfig(raw) {
+  return Schema.resolve({ ...raw }, NiubashExecutor.Config)[0]
+}
+
 function makeExecutor(options = {}) {
   const subprocess = options.subprocess ?? fakeSubprocess()
-  const { ctx, confined, warnings } = fakeContext({ subprocess, sandboxMode: options.sandboxMode, confine: options.confine })
-  const executor = new NiubashExecutor(ctx, { ...baseConfig, ...options.config })
+  const { ctx, confined } = fakeContext({ subprocess, sandboxMode: options.sandboxMode, confine: options.confine })
+  const executor = new NiubashExecutor(ctx, resolveConfig({ ...baseConfig, ...options.config }))
   if (options.nativeShells !== undefined) executor.niuOptions.nativeShells = options.nativeShells
-  return { executor, subprocess, confined, ctx, warnings }
+  return { executor, subprocess, confined, ctx }
+}
+
+/** Run one request to settlement: the foreground projection of `execute`. */
+async function settle(executor, request) {
+  const handle = await executor.execute(executor.resolve(request))
+  return handle.result()
 }
 
 test('builds the documented Niubash argv', () => {
@@ -144,15 +177,29 @@ test('a dangerous malformed allowlist or argv prefix fails at construction', () 
   assert.throws(() => makeExecutor({ config: { niuArgs: [] } }), /niuArgs/)
 })
 
-test('full-access foreground runs spawn the Niubash argv and report unconfined facts', async () => {
-  const { executor, subprocess } = makeExecutor({ sandboxMode: 'danger-full-access' })
-  const result = await executor.run(executor.resolve({ command: 'echo hi' }))
+test('full-access execution spawns the Niubash argv and reports unconfined facts', async () => {
+  const { executor, subprocess, confined } = makeExecutor({ sandboxMode: 'danger-full-access' })
+  const result = await settle(executor, { command: 'echo hi' })
   assert.equal(subprocess.spawns.length, 1)
   assert.deepEqual(subprocess.spawns[0].argv, ['niu.exe', '-c', 'echo hi'])
   assert.equal(subprocess.spawns[0].cwd, process.cwd())
+  assert.equal(confined.length, 0, 'the full-access path never asks the sandbox to wrap')
   assert.deepEqual(result.sandbox, { mode: 'danger-full-access', denied: false })
   assert.equal(result.exitCode, 0)
   assert.equal(result.stdout.text, 'ok')
+})
+
+test('the handle exposes the live process and one memoized result', async () => {
+  const subprocess = fakeSubprocess({ defer: true })
+  const { executor } = makeExecutor({ subprocess, sandboxMode: 'danger-full-access' })
+  const handle = await executor.execute(executor.resolve({ command: 'echo hi' }))
+  assert.equal(handle.status, 'running')
+  assert.equal(typeof handle.readOutput, 'function')
+  assert.equal(handle.result(), handle.result(), 'result() is memoized')
+  subprocess.procs[0].release()
+  await handle.result()
+  assert.equal(handle.status, 'completed')
+  assert.equal(subprocess.spawns.length, 1)
 })
 
 test('the default posture is direct execution: a confined session is NOT wrapped', async () => {
@@ -160,8 +207,23 @@ test('the default posture is direct execution: a confined session is NOT wrapped
     sandboxMode: 'workspace-write',
     confine: (argv) => ['acl-runner', '--', ...argv],
   })
-  const result = await executor.run(executor.resolve({ command: 'ls' }))
+  const result = await settle(executor, { command: 'ls' })
   assert.equal(confined.length, 0, 'ctx.sandbox is never asked to wrap by default')
+  assert.deepEqual(subprocess.spawns[0].argv, ['niu.exe', '-c', 'ls'])
+  assert.deepEqual(result.sandbox, { mode: 'danger-full-access', denied: false, bypassed: 'workspace-write' })
+})
+
+test('a hand-built spec still reports the deployment policy it bypassed', async () => {
+  const { executor, subprocess } = makeExecutor({ sandboxMode: 'workspace-write' })
+  const handle = await executor.execute({
+    command: 'ls',
+    workdir: process.cwd(),
+    timeoutMs: 5000,
+    onExpiry: 'kill',
+    stdoutMaxBytes: 4096,
+    sandboxPolicy: undefined,
+  })
+  const result = await handle.result()
   assert.deepEqual(subprocess.spawns[0].argv, ['niu.exe', '-c', 'ls'])
   assert.deepEqual(result.sandbox, { mode: 'danger-full-access', denied: false, bypassed: 'workspace-write' })
 })
@@ -180,27 +242,40 @@ test('sandbox: true keeps the first-party confinement path', async () => {
     confine: (argv) => ['acl-runner', '--', ...argv],
     config: { sandbox: true },
   })
-  const result = await executor.run(executor.resolve({ command: 'ls' }))
+  const result = await settle(executor, { command: 'ls' })
   assert.deepEqual(confined[0].argv, ['niu.exe', '-c', 'ls'])
   assert.equal(confined[0].policy.mode, 'workspace-write')
   assert.deepEqual(subprocess.spawns[0].argv, ['acl-runner', '--', 'niu.exe', '-c', 'ls'])
   assert.deepEqual(result.sandbox, { mode: 'workspace-write', denied: false, enforcement: 'strict' })
 })
 
+test('sandbox: true forwards the provider cancellation to ctx.sandbox.confine', async () => {
+  const { executor, confined } = makeExecutor({
+    sandboxMode: 'workspace-write',
+    confine: (argv) => ['acl-runner', '--', ...argv],
+    config: { sandbox: true },
+  })
+  await settle(executor, { command: 'ls' })
+  assert.equal(confined.length, 1)
+  assert.equal(confined[0].signal instanceof AbortSignal, true, 'the 0.1.7 confine signature carries the signal')
+})
+
 test('a refusal inside a confined call happens before the sandbox is asked to wrap', async () => {
   const { executor, confined } = makeExecutor({ sandboxMode: 'workspace-write', config: { sandbox: true } })
-  await assert.rejects(() => executor.run(executor.resolve({ command: 'cmd /c dir' })), /Niubash-only/)
+  await assert.rejects(() => executor.execute(executor.resolve({ command: 'cmd /c dir' })), /Niubash-only/)
   assert.equal(confined.length, 0)
 })
 
-test('background starts spawn Niubash and expose a live handle', async () => {
-  const { executor, subprocess } = makeExecutor({ sandboxMode: 'danger-full-access' })
-  const proc = executor.start(executor.resolve({ command: 'sleep 5' }))
+test('background execution returns a live handle that can be killed', async () => {
+  const subprocess = fakeSubprocess({ defer: true })
+  const { executor } = makeExecutor({ subprocess, sandboxMode: 'danger-full-access' })
+  const handle = await executor.execute(executor.resolve({ command: 'sleep 5', onExpiry: 'none' }))
   assert.deepEqual(subprocess.spawns[0].argv, ['niu.exe', '-c', 'sleep 5'])
-  assert.equal(proc.status, 'running')
-  assert.equal(proc.kill(), true)
-  assert.equal(proc.status, 'killed')
-  await proc.done
+  assert.equal(handle.status, 'running')
+  assert.equal(handle.kill(), true)
+  assert.equal(handle.status, 'killed')
+  subprocess.procs[0].release()
+  await handle.done
 })
 
 test('sandbox: true wraps background runs and stamps sandbox facts on settlement', async () => {
@@ -209,12 +284,12 @@ test('sandbox: true wraps background runs and stamps sandbox facts on settlement
     confine: (argv) => ['acl-runner', '--', ...argv],
     config: { sandbox: true },
   })
-  const proc = executor.start(executor.resolve({ command: 'ls' }))
+  const handle = await executor.execute(executor.resolve({ command: 'ls', onExpiry: 'none' }))
   assert.deepEqual(subprocess.spawns[0].argv, ['acl-runner', '--', 'niu.exe', '-c', 'ls'])
-  await proc.done
-  assert.equal(proc.status, 'completed')
-  assert.equal(proc.sandbox?.mode, 'workspace-write')
-  assert.equal(proc.sandbox?.denied, false)
+  await handle.done
+  assert.equal(handle.status, 'completed')
+  assert.equal(handle.sandbox?.mode, 'workspace-write')
+  assert.equal(handle.sandbox?.denied, false)
 })
 
 test('by default background runs are not wrapped either', async () => {
@@ -222,10 +297,10 @@ test('by default background runs are not wrapped either', async () => {
     sandboxMode: 'workspace-write',
     confine: (argv) => ['acl-runner', '--', ...argv],
   })
-  const proc = executor.start(executor.resolve({ command: 'ls' }))
+  const handle = await executor.execute(executor.resolve({ command: 'ls', onExpiry: 'none' }))
   assert.equal(confined.length, 0)
   assert.deepEqual(subprocess.spawns[0].argv, ['niu.exe', '-c', 'ls'])
-  await proc.done
+  await handle.done
 })
 
 test('a failed call carries an actionable Niubash hint on its stderr', async () => {
@@ -233,7 +308,7 @@ test('a failed call carries an actionable Niubash hint on its stderr', async () 
     subprocess: fakeSubprocess({ exitCode: 127, stdout: '', stderr: 'bash: line 1: awk: command not found\n' }),
     sandboxMode: 'danger-full-access',
   })
-  const result = await executor.run(executor.resolve({ command: "awk '{print $1}' f.txt" }))
+  const result = await settle(executor, { command: "awk '{print $1}' f.txt" })
   assert.match(result.stderr.text, /Niubash hint \(missing-program\)/)
   assert.match(result.stderr.text, /is not installed in this Niubash deployment/)
 })
@@ -243,7 +318,7 @@ test('hints can be turned off', async () => {
     subprocess: fakeSubprocess({ exitCode: 127, stdout: '', stderr: 'bash: line 1: awk: command not found\n' }),
     config: { dialectHints: false },
   })
-  const result = await executor.run(executor.resolve({ command: 'awk 1 f' }))
+  const result = await settle(executor, { command: 'awk 1 f' })
   assert.equal(result.stderr.text, 'bash: line 1: awk: command not found\n')
 })
 
@@ -298,12 +373,12 @@ const VERSION_TEXT = [
 async function bootExecutor(replies, config = {}) {
   const subprocess = scriptedSubprocess(replies)
   const { ctx, confined } = fakeContext({ subprocess })
-  const executor = new NiubashExecutor(ctx, {
+  const executor = new NiubashExecutor(ctx, resolveConfig({
     ...baseConfig,
     verifyNiubash: true,
     requireNiubash: true,
     ...config,
-  })
+  }))
   await executor[Service.init]()
   return { executor, subprocess, confined }
 }
