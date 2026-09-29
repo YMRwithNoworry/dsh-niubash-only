@@ -43,9 +43,10 @@ function skip(name, reason) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
- * Run one command through the seam and settle its foreground projection. On the
- * 0.1.7 line there is exactly one verb: `execute(spec)` resolves with the live
- * handle, and `result()` is the foreground result.
+ * Run one command through the seam and settle its foreground projection. The
+ * seam has exactly one verb (`0.2.0-rc.2`, unchanged since `0.1.7-rc.1`):
+ * `execute(spec)` resolves with the live handle, and `result()` is the
+ * foreground result.
  * @param shell - the live `ctx.shell` service.
  * @param command - Bash source.
  * @returns the settled {@link ShellRunResult}.
@@ -94,7 +95,7 @@ export async function apply(ctx) {
     record('shell service is the Niubash executor', shell?.constructor?.name === 'NiubashExecutor', shell?.constructor?.name)
     record('probed Niubash version', typeof shell.niuVersion === 'string', shell.niuVersion ?? '(unknown)')
     record('Niubash-owned bash/sh were probed', (shell.niuNativeShells?.names ?? []).length > 0, (shell.niuNativeShells?.names ?? []).join(','))
-    record('the shell service exposes the 0.1.7 execution seam', typeof shell.execute === 'function' && typeof shell.resolve === 'function')
+    record('the shell service exposes the one-verb execution seam', typeof shell.execute === 'function' && typeof shell.resolve === 'function')
 
     // An agent preset mounts its own shell tool inside a child scope. Teaching
     // has to reach it: the waterfall listener runs at the root, and a root

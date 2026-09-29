@@ -3,9 +3,11 @@
  * failure hint, and the confined and full-access paths — driven through a
  * stand-in subprocess seam, so no dsh boot and no real command is needed.
  *
- * Since dsh `0.1.7-rc.1` the shell seam has one execution verb, `execute(spec)`,
- * which resolves with a live handle whose `result()` is the memoized foreground
- * projection; these tests drive that contract.
+ * Since dsh `0.1.7-rc.1` — and unchanged in `0.2.0-rc.2`, whose `dsh-shell` /
+ * `dsh-bash-sandbox` / `dsh-pwsh-sandbox` sources are byte-identical — the shell
+ * seam has one execution verb, `execute(spec)`, which resolves with a live handle
+ * whose `result()` is the memoized foreground projection; these tests drive that
+ * contract.
  *
  * The `@deepseek-ai/*` peer packages the executor extends are resolved from the
  * dsh installation that `dev/link-peers.mjs` links into `node_modules/` for
@@ -257,7 +259,7 @@ test('sandbox: true forwards the provider cancellation to ctx.sandbox.confine', 
   })
   await settle(executor, { command: 'ls' })
   assert.equal(confined.length, 1)
-  assert.equal(confined[0].signal instanceof AbortSignal, true, 'the 0.1.7 confine signature carries the signal')
+  assert.equal(confined[0].signal instanceof AbortSignal, true, 'the confine signature carries the signal')
 })
 
 test('a refusal inside a confined call happens before the sandbox is asked to wrap', async () => {

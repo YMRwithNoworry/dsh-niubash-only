@@ -117,6 +117,21 @@ test('the tool description states the dialect and the traps', () => {
   assert.match(NIUBASH_COMMAND_PARAM_DESCRIPTION, /Bash/)
 })
 
+test('the rewrite carries the host-safety sentence the first-party description added', () => {
+  // dsh 0.2.0-rc.2 added this guardrail to the first-party bash/pwsh
+  // descriptions. This bundle replaces those descriptions wholesale, so if the
+  // sentence is not carried over by hand the model silently loses it — the
+  // rewrite would be *less* safe than the text it replaced.
+  for (const options of [{ background: true, escalation: true }, { background: true, escalation: true, sandbox: true }, {}]) {
+    const description = buildToolDescription(options)
+    assert.match(description, /Before any delete or move, verify that the resolved absolute target path is the intended one/)
+    assert.match(description, /\$\{VAR:\?\}/)
+  }
+  // …and the guide teaches the Bash spelling of the same rule.
+  assert.match(buildGuide({ variant: 'full' }), /realpath -m -- "\$p"/)
+  assert.match(buildGuide({ variant: 'full' }), /\$\{tmp:\?\}/)
+})
+
 test('the description tells the truth about where commands run', () => {
   // Default posture: unconfined on the host, so no sandbox marker can appear and
   // escalation is inert — the description must say both instead of promising them.

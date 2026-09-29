@@ -4,7 +4,7 @@
 
 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的**唯一 shell 换成 Niubash**，并**教会模型写 Niubash 支持的 Bash** 的 Profile Bundle。
 
-适配版本：**dsh `0.1.7-rc.1`**（CLI 与库均实测通过；`0.1.5-rc.2`/`0.1.5-rc.1` 亦可，见"接缝版本"）。运行时要求 Node `>=22.19.0` 与 [Niubash](https://github.com/unixwin/niubash)（实测 `Niubash 1.1.4` + `WinuxCmd 1.0.8`，Windows 10/11）。
+适配版本：**dsh `0.2.0-rc.2`**（CLI 与库均实测通过）。`0.1.7-rc.x` 与它共用同一条 shell 接缝——`dsh-shell`、`dsh-bash-sandbox`、`dsh-pwsh-sandbox` 的源码在两个版本之间**逐字节相同**——但 0.2.0-rc.2 的安装器会拿 `peerDependencies` 硬校验运行时版本，所以 peer 范围按 `^0.2.0-rc.2` 声明（`0.1.5-rc.x` 那一代接缝不同，不适用）。运行时要求 Node `>=22.19.0` 与 [Niubash](https://github.com/unixwin/niubash)（实测 `Niubash 1.1.4` + `WinuxCmd 1.0.8`，Windows 10/11）。
 
 Niubash 是 Windows 原生 shell：语言引擎是 rubash（GNU Bash 语义，`$BASH_VERSION=5.3.0(1)-release`），Unix 命令来自 WinuxCmd（`ls`/`grep`/`sed`/`find`… 是真二进制，在 `PATH` 上），一个 `niu.exe` 全包。本插件让 dsh 里**每一次** shell 执行都走它。
 
@@ -16,7 +16,7 @@ Niubash 是 Windows 原生 shell：语言引擎是 rubash（GNU Bash 语义，`$
    `bash-sandbox` / `pwsh-sandbox` 两个第一方执行器被禁用，换成 `dsh-niubash-only/executor`：所有 shell 执行一律变成
    `niu -c "<command>"`。
    换的是**能力接缝**（capability seam）而不是模型工具，所以 dsh 里所有走 `ctx.shell` 的消费者都会用 Niubash：模型工具、后台任务（`run_in_background`）、hook 桥（`dsh-hooks-*`）、`tmux-context`、以及任何进程内插件调用。超时、输出上限、spill 文件、后台句柄、取消与结果事实全部沿用第一方实现（继承 `SandboxPwshExecutor` / `SandboxBashExecutor`，只替换 argv）。
-   自 dsh `0.1.7-rc.1` 起接缝只剩**一个执行动词** `execute(spec) -> ShellExecution`（活进程句柄 + 记忆化的前台投影 `result()`；"前台/后台"由调用方是否 await `result()` 决定），0.1.5 那一代的 `run`/`start`/`runArgv`/`startArgv` 已不存在——本插件实现的就是这个新动词，前台调用、后台任务、hook 与进程内调用拿到的是同一个句柄契约。
+   自 dsh `0.1.7-rc.1`（`0.2.0-rc.2` 沿用同一条接缝）起只剩**一个执行动词** `execute(spec) -> ShellExecution`（活进程句柄 + 记忆化的前台投影 `result()`；"前台/后台"由调用方是否 await `result()` 决定），0.1.5 那一代的 `run`/`start`/`runArgv`/`startArgv` 已不存在——本插件实现的就是这个新动词，前台调用、后台任务、hook 与进程内调用拿到的是同一个句柄契约。
    **执行位置默认直接在本机**：`ctx.sandbox` 不包裹、不拦截 `niu`（`sandbox: false`），因此受限会话里也照常可用；结果的 `sandbox` 事实会如实报 `mode: danger-full-access`，会话要求受限模式时另报 `bypassed: <该模式>`。要恢复第一方的沙箱包裹语义就设 `sandbox: true`（原因与上游修法见下文）。
    `niu -c` 是一发式命令域：**不加载 `~/.niubashrc`、不加载插件、不跑交互钩子、无 banner**，退出码原样传递——这正是 agent 需要的确定性契约。
 
@@ -71,7 +71,7 @@ Niubash 是 Windows 原生 shell：语言引擎是 rubash（GNU Bash 语义，`$
 ## 安装
 
 ```sh
-# 从 npm 安装（已发布）
+# 从 npm 安装（registry 上是 0.1.0，比本仓库旧；要最新代码用下面两种）
 dsh plugin --profile web add dsh-niubash-only
 
 # 从 GitHub 直接安装进某个 profile（想跟仓库走，或需要未发布的提交）
@@ -85,6 +85,21 @@ dsh plugin --profile web add file:/path/to/dsh-niubash-only
 ```
 
 安装后**重启该 profile**。`dsh plugin` 会把包登记进 `dsh.profile.bundles`（本包声明了 `dsh.bundle.patch`），补丁层会把执行器与教学层两行插进组合树。
+
+> **⚠️ dsh 0.2.0-rc.2 起，安装器会按 `peerDependencies` 校验运行时版本**，不匹配就直接拒绝安装：
+>
+> ```text
+> dsh: installation rejected: Plugin dsh-niubash-only@0.2.0 is incompatible with dsh 0.2.0-rc.2:
+>      peerDependencies {"@deepseek-ai/dsh-shell":"^0.1.7-rc.1", …}
+> ```
+>
+> 这就是本插件 `0.3.0` 把 peer 范围改成 `^0.2.0-rc.2` 的原因（`0.2.0` 及更早版本装不进 0.2.0-rc.2）。若确实要用旧版本，安装器给的逃生口是**按精确版本放行**：
+>
+> ```sh
+> dsh plugin --profile web allow-version dsh-niubash-only@0.2.0 --dsh-version 0.2.0-rc.2 --accept-risk
+> ```
+>
+> 但那是"我知道我在冒险"的开关：0.1.7 与 0.2.0 的接缝虽然本轮实测一致，新版本仍可能引入行为差异。
 
 > **⚠️ 先卸掉/禁用别的 shell 提供者**：一个上下文只允许一个 `ctx.shell` 提供者。如果 profile 里已经有别的 shell 执行器 bundle，必须先处理，否则启动时会因重复注册 `shell` 服务而失败。最常见的两个：
 >
@@ -201,6 +216,8 @@ niu: failed to open history provider C:\Users\me\.niubash_history: I/O error: �
 
 上游修法很小：`niu -c` 根本不需要 history——在 `-c` 路径跳过 history provider 初始化，或让 `NIU_HISTORY_PATH` / `--no-history` 能覆盖它。修好之后把 `sandbox: true` 打开即可回到受限执行。
 
+dsh `0.2.0-rc.2` 另外给 Windows 受限模式加了一个 ACL 诊断技能（`diagnose-windows-sandbox-acl`，由 `dsh-sandbox-windows-acl` 注册）：如果你把 `sandbox: true` 打开、又撞上"本不该被拒的路径也拒绝访问"，先让模型调用那个技能，它会把该路径与每一级父目录的 ACL 查一遍并**在同一次运行里修掉能证明的问题**；正常的受限拒绝不需要它。默认的 `sandbox: false` 与它无关。
+
 插件不会假装这件事不存在：启动冒烟测试（`smokeTest: true`，默认开）走的是模型工具调用那条真实路径，因此一旦命令起不来，启动日志里就**当场**出现原因与修法；这条事实也通过 shell 服务的 `niuSmoke`（`{ ok, detail }`）暴露给进程内消费者。
 
 **本机实测**：`danger-full-access` 与 `workspace-write` 两种模式下集成测试都是 **39/39 全过**；后者的断言里明确验证了"受限会话仍能跑命令，且结果报 `bypassed: "workspace-write"`"。
@@ -223,12 +240,18 @@ niu: failed to open history provider C:\Users\me\.niubash_history: I/O error: �
 ## 开发与验证
 
 ```sh
-node --test test/                 # 84 个单元测试（守卫 / 方言预检与提示 / 手册与工具清单 / 解析决策表 / 执行器 argv、启动探测与执行姿势 / 教学层）
+node --test test/                 # 85 个单元测试（守卫 / 方言预检与提示 / 手册与工具清单 / 解析决策表 / 执行器 argv、启动探测与执行姿势 / 教学层）
 node test/integration.mjs         # 端到端：建临时 DSH_HOME、装 profile、真实启动、39 项断言
 node test/integration.mjs --mode workspace-write   # 受限会话：验证"仍能跑命令 + 结果如实报 bypassed"
 node test/scratch/confined-diag.mjs workspace-write # 把执行器切回 sandbox: true，复现上游的历史文件限制
-node dev/link-peers.mjs           # 把本机 dsh 安装里的 @deepseek-ai/* 软链到 node_modules/，供 checkout 直接跑测试
+
+# 对着一份指定版本的 dsh 库跑（checkout 里的测试默认用本机全局安装的那份）
+npm i --prefix ../.peers-020rc2 @deepseek-ai/dsh@0.2.0-rc.2
+DSH_NODE_MODULES=../.peers-020rc2/node_modules/@deepseek-ai node dev/link-peers.mjs
+DSH_INTEGRATION_CLI=../.peers-020rc2/node_modules/@deepseek-ai/dsh/lib/bin.js node test/integration.mjs
 ```
+
+`dev/link-peers.mjs` 把一份本机 dsh 安装里的 `@deepseek-ai/*` 软链到 `node_modules/`，供 checkout 直接跑测试；不设 `DSH_NODE_MODULES` 时它取全局 `dsh` 自带的那份。
 
 集成测试会依次验证：`ctx.shell` 就是 `NiubashExecutor`、`niu --version` 与 `bash/sh` 探测、**启动冒烟测试真跑通一条命令**、shell 内建、Unix 工具管道、原生 Windows 程序、非零退出以结果上报、**外部 shell handoff 被拒**、**Niubash 自己的 bash shim 放行**、**方言预检拒绝 `$env:PATH` 与 `ls -Recurse` 并给出 Bash 写法**、**失败调用带回 `Niubash hint`**、系统提示含规则/手册/对照表/失败目录/坑、`bash`/`pwsh` 描述与参数说明已改写、**preset 子 scope 里的 shell 工具同样被改写**、**沙箱事实如实上报（含受限会话的 `bypassed`）**。可用 `DSH_INTEGRATION_CLI=/path/to/@deepseek-ai/dsh/lib/bin.js` 指定要驱动的 CLI。
 
@@ -241,6 +264,7 @@ node dev/link-peers.mjs           # 把本机 dsh 安装里的 @deepseek-ai/* �
 | 启动日志报 `failed to open history provider … 拒绝访问`，之后每次调用都同样失败 | 这只会出现在你把 `sandbox` 打开（`sandbox: true`）且会话是受限模式时：Niubash 宿主层限制（`niu -c` 也要开历史文件）。改回默认的 `sandbox: false`，或改用 `danger-full-access`；详见"为什么默认不走沙盒" |
 | 工具调用报 `Niubash-only shell: sandbox_permissions 没用` / 明明是受限会话却写成功了 | 这是默认姿势：命令直接在本机运行，`sandbox_permissions` 不生效、也不会出现 `[sandbox: …]` 标记；需要沙箱语义就设 `sandbox: true`（并接受上面的历史文件限制） |
 | 启动报重复注册 `shell` 服务 | 还有别的 shell 执行器 bundle（`dsh-nushell-only`、`@cmx666/dsh-winuxsh-bundle`…）没卸掉或没禁用 |
+| `dsh plugin add` 报 `installation rejected: Plugin … is incompatible with dsh 0.2.0-rc.2` | 插件版本与运行时版本不匹配（0.2.0-rc.2 起安装器按 `peerDependencies` 硬校验）。升级到本插件的 `0.3.0`（peer 为 `^0.2.0-rc.2`），或用安装器给的精确版本豁免 `dsh plugin --profile <p> allow-version dsh-niubash-only@<v> --dsh-version <dsh 版本> --accept-risk` |
 | 工具调用报 `Niubash-only shell: refusing to hand this command to …` | 命令里在调 `powershell`/`cmd`/`wsl`/`nu` 或非 Niubash 的 `bash`；按提示改写成 Bash，或确有需要时用 `foreignShellAllowlist` / `enforceNiubashOnly: false` |
 | 工具调用报 `refusing a powershell-…`，但命令其实是合法 Bash | 误判：把整条命令写进 `foreignShellAllowlist`；`lib/dialect.js` 的规则都带 id，便于定位 |
 | 命令输出 `:PATH` 之类莫名其妙的结果 | 那就是 `$env:NAME` 的静默错误（若预检被关掉了）；改成 `$NAME` |
