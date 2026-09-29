@@ -71,7 +71,7 @@ The tool inventory is measured the same way (`test/guide.test.mjs` asserts that 
 ## Install
 
 ```sh
-# Install from npm (the registry copy is 0.1.0 and lags this repo; use one of the forms below for current code)
+# Install from npm (the registry's `latest` is 0.3.0, the same version as this repo)
 dsh plugin --profile web add dsh-niubash-only
 
 # Install straight from GitHub into a profile (to track the repo, or an unreleased commit)
